@@ -1,0 +1,631 @@
+// Parqel — closed-campus parking accountability
+//
+// Design notes:
+//  - Every User comes from the org roster. There is no self-registration.
+//  - Two-wheeler zones track capacity only and have no ParkingSpot rows,
+//    but two-wheelers are first-class for violations and owner alerts.
+//  - Violations are never hard-deleted; they are VOIDED with a reason.
+//  - Every mutation writes an AuditLog row.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ───────────────────────── enums ─────────────────────────
+
+enum UserType {
+  STAFF
+  FACULTY
+  STUDENT
+  CONTRACTOR
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum Role {
+  EMPLOYEE
+  GUARD
+  SUPERVISOR
+  PARKING_ADMIN
+  ADMIN
+}
+
+enum VehicleClass {
+  TWO_WHEELER
+  FOUR_WHEELER
+}
+
+enum VehicleStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum AllocationType {
+  FIXED
+  SHARED
+  EVENT
+}
+
+/// MIXED zones hold both classes; TWO_WHEELER zones are capacity-only.
+enum ZoneVehicleClass {
+  TWO_WHEELER
+  FOUR_WHEELER
+  MIXED
+}
+
+enum SpotType {
+  STANDARD
+  EV
+  ACCESSIBLE
+  VISITOR
+}
+
+enum SpotStatus {
+  AVAILABLE
+  OCCUPIED
+  RESERVED
+  BLOCKED
+}
+
+enum ReservationStatus {
+  HELD
+  CHECKED_IN
+  RELEASED_NOSHOW
+  CANCELLED
+  COMPLETED
+}
+
+/// GEOFENCE_PROMPT means the geofence suggested it and a human confirmed.
+/// The geofence is never a source of truth on its own.
+enum CheckInMethod {
+  MANUAL
+  QR
+  GEOFENCE_PROMPT
+}
+
+enum ViolationType {
+  BLOCKING
+  WRONG_SLOT
+  NO_PERMIT
+  FIRE_LANE
+  DOUBLE_PARK
+  OTHER
+}
+
+enum ViolationStatus {
+  SUBMITTED
+  TRIAGED
+  APPROVED
+  REJECTED
+  VOIDED
+}
+
+enum AppealDecision {
+  PENDING
+  UPHELD
+  OVERTURNED
+}
+
+enum PassStatus {
+  ACTIVE
+  USED
+  EXPIRED
+  REVOKED
+}
+
+enum AlertSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum AlertStatus {
+  OPEN
+  ACKNOWLEDGED
+  DISPATCHED
+  RESOLVED
+}
+
+/// SMS and VOICE are reserved for phase 2; they need TRAI DLT registration
+/// before they can be used, so v1 only ever emits PUSH and IN_APP.
+enum NotificationChannel {
+  PUSH
+  IN_APP
+  SMS
+  VOICE
+}
+
+enum NotificationStatus {
+  QUEUED
+  SENT
+  FAILED
+}
+
+enum DispatchStatus {
+  ASSIGNED
+  RESPONDING
+  RESOLVED
+}
+
+// ───────────────────────── identity ─────────────────────────
+
+model User {
+  id         String     @id @default(cuid())
+  employeeId String     @unique @map("employee_id")
+  name       String
+  email      String?    @unique
+  phone      String?    @unique
+  userType   UserType   @map("user_type")
+  department String?
+  passwordHash String?    @map("password_hash")
+  status     UserStatus @default(ACTIVE)
+  createdAt  DateTime   @default(now()) @map("created_at")
+  updatedAt  DateTime   @updatedAt @map("updated_at")
+
+  roles           UserRole[]
+  vehicles        Vehicle[]        @relation("VehicleOwner")
+  vehiclesActedOn Vehicle[]        @relation("VehicleApprover")
+  slotAssignments SlotAssignment[] @relation("SlotAssignee")
+  slotsAssigned   SlotAssignment[] @relation("SlotAssigner")
+  reservations    Reservation[]
+  checkIns        CheckIn[]
+  eventsCreated   Event[]
+
+  violationsReported Violation[] @relation("ViolationReporter")
+  violationsTriaged  Violation[] @relation("ViolationTriager")
+  violationsDecided  Violation[] @relation("ViolationDecider")
+
+  appealsFiled    Appeal[] @relation("AppealFiler")
+  appealsReviewed Appeal[] @relation("AppealReviewer")
+
+  passesIssued  VisitorPass[] @relation("PassIssuer")
+  passesHosted  VisitorPass[] @relation("PassHost")
+  passesScanned VisitorPass[] @relation("PassScanner")
+
+  unknownVehiclesLogged UnknownVehicleLog[]
+  alertsCreated         Alert[]             @relation("AlertCreator")
+  notifications         Notification[]
+  dispatchesAssigned    Dispatch[]          @relation("DispatchAssignee")
+  dispatchesOrdered     Dispatch[]          @relation("DispatchOrderer")
+  auditEntries          AuditLog[]
+
+  @@index([status])
+  @@index([userType])
+  @@map("users")
+}
+
+/// Permissions are (role x scope). An empty scopeZoneIds means org-wide.
+/// validFrom/validTo support shift-limited guards and temporary elevation.
+model UserRole {
+  id           String    @id @default(cuid())
+  userId       String    @map("user_id")
+  role         Role
+  scopeZoneIds String[]  @map("scope_zone_ids")
+  validFrom    DateTime? @map("valid_from")
+  validTo      DateTime? @map("valid_to")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, role])
+  @@index([role])
+  @@map("user_roles")
+}
+
+/// Short-lived OTP challenge for the employee-ID login fallback.
+/// Only ever issued against an existing roster User.
+model OtpChallenge {
+  id         String    @id @default(cuid())
+  employeeId String    @map("employee_id")
+  phone      String
+  codeHash   String    @map("code_hash")
+  expiresAt  DateTime  @map("expires_at")
+  attempts   Int       @default(0)
+  consumedAt DateTime? @map("consumed_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  @@index([employeeId, expiresAt])
+  @@map("otp_challenges")
+}
+
+model Vehicle {
+  id           String        @id @default(cuid())
+  plateNumber  String        @unique @map("plate_number")
+  vehicleClass VehicleClass  @map("vehicle_class")
+  makeModel    String?       @map("make_model")
+  userId       String        @map("user_id")
+  status       VehicleStatus @default(PENDING)
+  approvedById String?       @map("approved_by")
+  approvedAt   DateTime?     @map("approved_at")
+  createdAt    DateTime      @default(now()) @map("created_at")
+  updatedAt    DateTime      @updatedAt @map("updated_at")
+
+  owner      User  @relation("VehicleOwner", fields: [userId], references: [id])
+  approvedBy User? @relation("VehicleApprover", fields: [approvedById], references: [id])
+
+  reservations Reservation[]
+  checkIns     CheckIn[]
+  violations   Violation[]
+  alerts       Alert[]
+
+  @@index([userId])
+  @@index([status])
+  @@index([vehicleClass])
+  @@map("vehicles")
+}
+
+// ───────────────────────── places ─────────────────────────
+
+model ParkingZone {
+  id             String           @id @default(cuid())
+  name           String
+  building       String?
+  floor          String?
+  allocationType AllocationType   @map("allocation_type")
+  vehicleClass   ZoneVehicleClass @map("vehicle_class")
+  /// Authoritative for TWO_WHEELER zones, which have no spot rows.
+  capacity       Int
+  createdAt      DateTime         @default(now()) @map("created_at")
+  updatedAt      DateTime         @updatedAt @map("updated_at")
+
+  spots              ParkingSpot[]
+  reservations       Reservation[]
+  checkIns           CheckIn[]
+  violations         Violation[]
+  visitorPasses      VisitorPass[]
+  unknownVehicleLogs UnknownVehicleLog[]
+  entitlements       ZoneEntitlement[]
+  events             Event[]             @relation("EventZones")
+
+  @@index([allocationType])
+  @@index([vehicleClass])
+  @@map("parking_zones")
+}
+
+/// Only created for FOUR_WHEELER and MIXED zones. Two-wheeler zones use
+/// ParkingZone.capacity instead — bikes do not occupy discrete numbered slots.
+model ParkingSpot {
+  id           String     @id @default(cuid())
+  zoneId       String     @map("zone_id")
+  code         String
+  type         SpotType   @default(STANDARD)
+  status       SpotStatus @default(AVAILABLE)
+  /// Reserved for future hardware. Unused in v1.
+  sensorStatus String?    @map("sensor_status")
+  createdAt    DateTime   @default(now()) @map("created_at")
+  updatedAt    DateTime   @updatedAt @map("updated_at")
+
+  zone         ParkingZone      @relation(fields: [zoneId], references: [id], onDelete: Cascade)
+  assignments  SlotAssignment[]
+  reservations Reservation[]
+  checkIns     CheckIn[]
+  violations   Violation[]
+
+  @@unique([zoneId, code])
+  @@index([status])
+  @@map("parking_spots")
+}
+
+/// Which user types may book a zone.
+///
+/// Entitlements are not permissions. A permission answers "may this person
+/// perform this action"; an entitlement answers "is this person eligible for
+/// this resource". Keeping them apart is what stops role explosion — "students
+/// cannot book the staff lot" is a rule about user type and zone, not a new
+/// role.
+///
+/// No rows for a zone means unrestricted, the same "absent means
+/// unconstrained" default used for zone-scoped permissions.
+model ZoneEntitlement {
+  id       String   @id @default(cuid())
+  zoneId   String   @map("zone_id")
+  userType UserType @map("user_type")
+
+  zone ParkingZone @relation(fields: [zoneId], references: [id], onDelete: Cascade)
+
+  @@unique([zoneId, userType])
+  @@index([zoneId])
+  @@map("zone_entitlements")
+}
+
+/// Dated so a violation resolves against whoever held the slot at the time.
+/// endDate null means open-ended.
+model SlotAssignment {
+  id           String    @id @default(cuid())
+  spotId       String    @map("spot_id")
+  userId       String    @map("user_id")
+  startDate    DateTime  @map("start_date")
+  endDate      DateTime? @map("end_date")
+  assignedById String    @map("assigned_by")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  spot       ParkingSpot @relation(fields: [spotId], references: [id], onDelete: Cascade)
+  user       User        @relation("SlotAssignee", fields: [userId], references: [id])
+  assignedBy User        @relation("SlotAssigner", fields: [assignedById], references: [id])
+
+  @@index([spotId, startDate])
+  @@index([userId])
+  @@map("slot_assignments")
+}
+
+/// Temporarily opens zones for a program. May override a FIXED zone, in which
+/// case displaced assignees are notified.
+model Event {
+  id          String   @id @default(cuid())
+  name        String
+  startTime   DateTime @map("start_time")
+  endTime     DateTime @map("end_time")
+  createdById String   @map("created_by")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  createdBy    User          @relation(fields: [createdById], references: [id])
+  zones        ParkingZone[] @relation("EventZones")
+  reservations Reservation[]
+
+  @@index([startTime, endTime])
+  @@map("events")
+}
+
+// ───────────────────────── usage ─────────────────────────
+
+/// Only valid on SHARED and EVENT zones. Fixed zones need enforcement,
+/// not booking. holdUntil drives the no-show auto-release.
+model Reservation {
+  id        String            @id @default(cuid())
+  userId    String            @map("user_id")
+  vehicleId String            @map("vehicle_id")
+  zoneId    String            @map("zone_id")
+  spotId    String?           @map("spot_id")
+  eventId   String?           @map("event_id")
+  startTime DateTime          @map("start_time")
+  endTime   DateTime          @map("end_time")
+  holdUntil DateTime          @map("hold_until")
+  status    ReservationStatus @default(HELD)
+  createdAt DateTime          @default(now()) @map("created_at")
+  updatedAt DateTime          @updatedAt @map("updated_at")
+
+  user    User         @relation(fields: [userId], references: [id])
+  vehicle Vehicle      @relation(fields: [vehicleId], references: [id])
+  zone    ParkingZone  @relation(fields: [zoneId], references: [id])
+  spot    ParkingSpot? @relation(fields: [spotId], references: [id])
+  event   Event?       @relation(fields: [eventId], references: [id])
+  checkIn CheckIn?
+
+  @@index([status, holdUntil])
+  @@index([userId])
+  @@index([spotId, startTime])
+  @@map("reservations")
+}
+
+/// Honest v1 stand-in for a parking session: self-reported, no fake automation.
+/// Upgrades to gate-derived sessions when ANPR lands.
+model CheckIn {
+  id            String        @id @default(cuid())
+  userId        String        @map("user_id")
+  vehicleId     String        @map("vehicle_id")
+  zoneId        String        @map("zone_id")
+  spotId        String?       @map("spot_id")
+  reservationId String?       @unique @map("reservation_id")
+  method        CheckInMethod @default(MANUAL)
+  checkedInAt   DateTime      @default(now()) @map("checked_in_at")
+  checkedOutAt  DateTime?     @map("checked_out_at")
+
+  user        User         @relation(fields: [userId], references: [id])
+  vehicle     Vehicle      @relation(fields: [vehicleId], references: [id])
+  zone        ParkingZone  @relation(fields: [zoneId], references: [id])
+  spot        ParkingSpot? @relation(fields: [spotId], references: [id])
+  reservation Reservation? @relation(fields: [reservationId], references: [id])
+
+  @@index([userId, checkedOutAt])
+  @@index([vehicleId, checkedOutAt])
+  @@map("check_ins")
+}
+
+// ───────────────────────── enforcement ─────────────────────────
+
+/// plateEntered is what a human typed; ocrPlate is what the OCR read.
+/// matchedVehicleId is only set after a human confirms the match.
+model Violation {
+  id               String          @id @default(cuid())
+  type             ViolationType
+  status           ViolationStatus @default(SUBMITTED)
+  reportedById     String          @map("reported_by")
+  zoneId           String          @map("zone_id")
+  spotId           String?         @map("spot_id")
+  plateEntered     String?         @map("plate_entered")
+  ocrPlate         String?         @map("ocr_plate")
+  ocrConfidence    Float?          @map("ocr_confidence")
+  matchedVehicleId String?         @map("matched_vehicle_id")
+  imageOriginal    String          @map("image_original")
+  imageAnnotated   String?         @map("image_annotated")
+  note             String?
+  triagedById      String?         @map("triaged_by")
+  triagedAt        DateTime?       @map("triaged_at")
+  decidedById      String?         @map("decided_by")
+  decidedAt        DateTime?       @map("decided_at")
+  voidReason       String?         @map("void_reason")
+  createdAt        DateTime        @default(now()) @map("created_at")
+  updatedAt        DateTime        @updatedAt @map("updated_at")
+
+  reportedBy     User         @relation("ViolationReporter", fields: [reportedById], references: [id])
+  triagedBy      User?        @relation("ViolationTriager", fields: [triagedById], references: [id])
+  decidedBy      User?        @relation("ViolationDecider", fields: [decidedById], references: [id])
+  zone           ParkingZone  @relation(fields: [zoneId], references: [id])
+  spot           ParkingSpot? @relation(fields: [spotId], references: [id])
+  matchedVehicle Vehicle?     @relation(fields: [matchedVehicleId], references: [id])
+
+  appeals Appeal[]
+  alerts  Alert[]
+
+  @@index([status, createdAt])
+  @@index([matchedVehicleId])
+  @@index([reportedById])
+  @@index([zoneId, createdAt])
+  @@map("violations")
+}
+
+/// The reviewer must differ from the violation's decider — enforced in code.
+model Appeal {
+  id           String         @id @default(cuid())
+  violationId  String         @map("violation_id")
+  userId       String         @map("user_id")
+  reason       String
+  evidenceUrl  String?        @map("evidence_url")
+  decision     AppealDecision @default(PENDING)
+  reviewedById String?        @map("reviewed_by")
+  decidedAt    DateTime?      @map("decided_at")
+  reviewNote   String?        @map("review_note")
+  createdAt    DateTime       @default(now()) @map("created_at")
+
+  violation  Violation @relation(fields: [violationId], references: [id])
+  user       User      @relation("AppealFiler", fields: [userId], references: [id])
+  reviewedBy User?     @relation("AppealReviewer", fields: [reviewedById], references: [id])
+
+  @@index([decision, createdAt])
+  @@index([violationId])
+  @@map("appeals")
+}
+
+// ───────────────────────── gate operations ─────────────────────────
+
+model VisitorPass {
+  id           String       @id @default(cuid())
+  code         String       @unique
+  issuedById   String       @map("issued_by")
+  hostUserId   String       @map("host_user_id")
+  visitorName  String       @map("visitor_name")
+  plate        String
+  vehicleClass VehicleClass @map("vehicle_class")
+  zoneId       String?      @map("zone_id")
+  validFrom    DateTime     @map("valid_from")
+  validTo      DateTime     @map("valid_to")
+  status       PassStatus   @default(ACTIVE)
+  scannedAt    DateTime?    @map("scanned_at")
+  scannedById  String?      @map("scanned_by")
+  createdAt    DateTime     @default(now()) @map("created_at")
+
+  issuedBy  User         @relation("PassIssuer", fields: [issuedById], references: [id])
+  hostUser  User         @relation("PassHost", fields: [hostUserId], references: [id])
+  scannedBy User?        @relation("PassScanner", fields: [scannedById], references: [id])
+  zone      ParkingZone? @relation(fields: [zoneId], references: [id])
+
+  @@index([status, validTo])
+  @@index([hostUserId, createdAt])
+  @@index([plate])
+  @@map("visitor_passes")
+}
+
+/// A plate with no registered owner. There is nobody to notify, so these
+/// route to guard dispatch instead of the alert pipeline.
+model UnknownVehicleLog {
+  id         String   @id @default(cuid())
+  plate      String
+  image      String?
+  zoneId     String   @map("zone_id")
+  loggedById String   @map("logged_by")
+  note       String?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  zone     ParkingZone @relation(fields: [zoneId], references: [id])
+  loggedBy User        @relation(fields: [loggedById], references: [id])
+
+  @@index([plate])
+  @@index([createdAt])
+  @@map("unknown_vehicle_logs")
+}
+
+// ───────────────────────── alerting ─────────────────────────
+
+model Alert {
+  id          String        @id @default(cuid())
+  severity    AlertSeverity
+  status      AlertStatus   @default(OPEN)
+  vehicleId   String?       @map("vehicle_id")
+  violationId String?       @map("violation_id")
+  createdById String        @map("created_by")
+  message     String
+  createdAt   DateTime      @default(now()) @map("created_at")
+  updatedAt   DateTime      @updatedAt @map("updated_at")
+
+  vehicle   Vehicle?   @relation(fields: [vehicleId], references: [id])
+  violation Violation? @relation(fields: [violationId], references: [id])
+  createdBy User       @relation("AlertCreator", fields: [createdById], references: [id])
+
+  notifications Notification[]
+  dispatches    Dispatch[]
+
+  @@index([status, severity, createdAt])
+  @@index([vehicleId])
+  @@map("alerts")
+}
+
+/// One row per delivery attempt per channel, so escalation is auditable.
+model Notification {
+  id             String              @id @default(cuid())
+  alertId        String              @map("alert_id")
+  userId         String              @map("user_id")
+  channel        NotificationChannel
+  status         NotificationStatus  @default(QUEUED)
+  sentAt         DateTime?           @map("sent_at")
+  acknowledgedAt DateTime?           @map("acknowledged_at")
+  failureReason  String?             @map("failure_reason")
+  createdAt      DateTime            @default(now()) @map("created_at")
+
+  alert Alert @relation(fields: [alertId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id])
+
+  @@index([alertId])
+  @@index([userId, acknowledgedAt])
+  @@map("notifications")
+}
+
+model Dispatch {
+  id              String         @id @default(cuid())
+  alertId         String         @map("alert_id")
+  assignedGuardId String         @map("assigned_guard_id")
+  dispatchedById  String         @map("dispatched_by")
+  status          DispatchStatus @default(ASSIGNED)
+  respondedAt     DateTime?      @map("responded_at")
+  resolvedAt      DateTime?      @map("resolved_at")
+  createdAt       DateTime       @default(now()) @map("created_at")
+
+  alert         Alert @relation(fields: [alertId], references: [id], onDelete: Cascade)
+  assignedGuard User  @relation("DispatchAssignee", fields: [assignedGuardId], references: [id])
+  dispatchedBy  User  @relation("DispatchOrderer", fields: [dispatchedById], references: [id])
+
+  @@index([assignedGuardId, status])
+  @@index([alertId])
+  @@map("dispatches")
+}
+
+// ───────────────────────── audit ─────────────────────────
+
+/// Append-only. Written by the audited mutation helper on every change.
+model AuditLog {
+  id          String   @id @default(cuid())
+  actorUserId String?  @map("actor_user_id")
+  action      String
+  entity      String
+  entityId    String   @map("entity_id")
+  oldValue    Json?    @map("old_value")
+  newValue    Json?    @map("new_value")
+  ip          String?
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  actor User? @relation(fields: [actorUserId], references: [id])
+
+  @@index([entity, entityId])
+  @@index([actorUserId, createdAt])
+  @@index([createdAt])
+  @@map("audit_logs")
+}

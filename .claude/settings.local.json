@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git checkout *)",
+      "Bash(rm -f src/app/page.js src/app/login/page.js src/app/privacy/page.js src/app/terms/page.js \"src/app/terms/page.js~\" src/lib/firebase.js jsconfig.json public/file.svg public/globe.svg public/next.svg public/vercel.svg public/window.svg)",
+      "Bash(rmdir src/app/login src/app/terms src/app/privacy)",
+      "Bash(npx tsc *)",
+      "Bash(npx tsx *)"
+    ]
+  }
+}
