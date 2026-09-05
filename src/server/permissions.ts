@@ -99,6 +99,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'violation:read:any',
     'violation:triage',
     'violation:ocr:propose',
+    'violation:decide',
     'appeal:file',
     'pass:issue',
     'pass:scan',

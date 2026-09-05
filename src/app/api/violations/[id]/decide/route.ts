@@ -10,6 +10,8 @@ import { TransitionError } from '@/server/violations/access'
 
 const schema = z.object({
   decision: z.enum(['APPROVED', 'REJECTED']),
+  matchedVehicleId: z.string().nullable().optional(),
+  note: z.string().nullable().optional(),
 })
 
 export async function POST(request: NextRequest, ctx: RouteContext<'/api/violations/[id]/decide'>) {
@@ -22,7 +24,16 @@ export async function POST(request: NextRequest, ctx: RouteContext<'/api/violati
       return NextResponse.json({ error: 'Invalid request.' }, { status: 400 })
     }
 
-    const { alerted } = await decideViolation(actor, id, parsed.data.decision, await clientIp())
+    const { alerted } = await decideViolation(
+      actor,
+      id,
+      parsed.data.decision,
+      {
+        matchedVehicleId: parsed.data.matchedVehicleId,
+        note: parsed.data.note,
+      },
+      await clientIp(),
+    )
 
     // Delivery is outside the decision transaction on purpose: a push
     // provider being down must not roll back an approval.

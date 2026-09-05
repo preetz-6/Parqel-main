@@ -10,14 +10,11 @@ import {
   ZoneVehicleClass,
 } from '@/generated/prisma/enums'
 import { VIOLATION_LABELS } from '@/components/status-badge'
-import { DEFAULT_BUFFER_MINUTES } from '@/server/violations/service'
 import { ArrowRight, CheckCircle2 } from 'lucide-react'
 
 export default async function AdminOverviewPage() {
   const actor = await requireActor()
   const scope = scopedZoneIds(actor)
-  const now = Date.now()
-  const bufferMs = DEFAULT_BUFFER_MINUTES * 60 * 1000
 
   const [
     usersCount,
@@ -28,7 +25,6 @@ export default async function AdminOverviewPage() {
     bikeZonesCount,
     zonesList,
     submittedCount,
-    triagedViolations,
     pendingAppealsCount,
     activeDispatchesCount,
     recentViolations,
@@ -56,13 +52,6 @@ export default async function AdminOverviewPage() {
         ...(scope === null ? {} : { zoneId: { in: scope } }),
       },
     }),
-    prisma.violation.findMany({
-      where: {
-        status: ViolationStatus.TRIAGED,
-        ...(scope === null ? {} : { zoneId: { in: scope } }),
-      },
-      select: { id: true, triagedAt: true, createdAt: true },
-    }),
     prisma.appeal.count({
       where: { decision: AppealDecision.PENDING },
     }),
@@ -71,7 +60,7 @@ export default async function AdminOverviewPage() {
     }),
     prisma.violation.findMany({
       where: {
-        status: { in: [ViolationStatus.SUBMITTED, ViolationStatus.TRIAGED] },
+        status: ViolationStatus.SUBMITTED,
         ...(scope === null ? {} : { zoneId: { in: scope } }),
       },
       select: {
@@ -80,7 +69,6 @@ export default async function AdminOverviewPage() {
         status: true,
         plateEntered: true,
         createdAt: true,
-        triagedAt: true,
         zone: { select: { name: true } },
         reportedBy: { select: { name: true, employeeId: true } },
         matchedVehicle: { select: { plateNumber: true } },
@@ -90,20 +78,8 @@ export default async function AdminOverviewPage() {
     }),
   ])
 
-  // Split triaged violations into running buffer vs awaiting supervisor decision
-  let activeBufferCount = 0
-  let awaitingDecisionCount = 0
-  for (const v of triagedViolations) {
-    const triagedMs = v.triagedAt ? v.triagedAt.getTime() : v.createdAt.getTime()
-    if (now < triagedMs + bufferMs) {
-      activeBufferCount++
-    } else {
-      awaitingDecisionCount++
-    }
-  }
-
   const canTriage = holdsPermission(actor, 'violation:triage')
-  const totalQueueUrgent = submittedCount + awaitingDecisionCount
+  const totalQueueUrgent = submittedCount
 
   return (
     <div className="space-y-8 py-4">
@@ -142,12 +118,7 @@ export default async function AdminOverviewPage() {
               <div className="flex flex-wrap items-center gap-2 text-xs font-semibold text-amber-800 dark:text-amber-300">
                 {submittedCount > 0 && (
                   <span className="rounded bg-amber-100 px-2 py-0.5 dark:bg-amber-900/50">
-                    {submittedCount} reports awaiting triage
-                  </span>
-                )}
-                {awaitingDecisionCount > 0 && (
-                  <span className="rounded bg-rose-100 px-2 py-0.5 text-rose-800 dark:bg-rose-950/60 dark:text-rose-300">
-                    {awaitingDecisionCount} awaiting supervisor decision
+                    {submittedCount} {submittedCount === 1 ? 'report' : 'reports'} awaiting verification
                   </span>
                 )}
                 {pendingAppealsCount > 0 && (
@@ -257,9 +228,6 @@ export default async function AdminOverviewPage() {
               <ul className="divide-y divide-neutral-100 dark:divide-neutral-800">
                 {recentViolations.map((v) => {
                   const plate = v.matchedVehicle?.plateNumber ?? v.plateEntered ?? '—'
-                  const isSubmitted = v.status === ViolationStatus.SUBMITTED
-                  const triagedMs = v.triagedAt ? v.triagedAt.getTime() : v.createdAt.getTime()
-                  const isBufferExpired = !isSubmitted && now >= triagedMs + bufferMs
 
                   return (
                     <li
@@ -288,19 +256,9 @@ export default async function AdminOverviewPage() {
                       </div>
 
                       <div className="flex items-center gap-3">
-                        {isSubmitted ? (
-                          <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 ring-1 ring-amber-200 ring-inset dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-900">
-                            Awaiting triage
-                          </span>
-                        ) : isBufferExpired ? (
-                          <span className="rounded-full bg-rose-50 px-2 py-0.5 text-xs font-medium text-rose-700 ring-1 ring-rose-200 ring-inset dark:bg-rose-950/40 dark:text-rose-300 dark:ring-rose-900">
-                            Awaiting decision
-                          </span>
-                        ) : (
-                          <span className="rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 ring-1 ring-blue-200 ring-inset dark:bg-blue-950/40 dark:text-blue-300 dark:ring-blue-900">
-                            Buffer running
-                          </span>
-                        )}
+                        <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 ring-1 ring-amber-200 ring-inset dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-900">
+                          Awaiting verification
+                        </span>
 
                         <Link
                           href={`/security/${v.id}`}

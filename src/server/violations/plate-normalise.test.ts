@@ -7,6 +7,7 @@ import {
   normalisePlate,
   nearMatchConfidence,
   plateDistance,
+  isValidPlateFormat,
 } from './plate-normalise'
 
 describe('plate normalisation', () => {
@@ -59,3 +60,36 @@ describe('edit distance', () => {
     }
   })
 })
+
+describe('isValidPlateFormat', () => {
+  test('accepts valid Indian state and Bharat series plates', () => {
+    const valid = [
+      'KA 05 MN 1234',
+      'ka-05-mn-1234',
+      'MH12AB1234',
+      'DL 1C AA 1111',
+      '22 BH 1234 AA',
+      '21BH9999Z',
+      'GA01A1',
+    ]
+    for (const plate of valid) {
+      assert.equal(isValidPlateFormat(plate), true, `${plate} should be valid`)
+    }
+  })
+
+  test('rejects invalid or gibberish plates', () => {
+    const invalid = [
+      '',
+      '   ',
+      '123',
+      'ABC',
+      'NOTAPLATE',
+      'KA!05@MN',
+      'TOOLONG1234567890',
+    ]
+    for (const plate of invalid) {
+      assert.equal(isValidPlateFormat(plate), false, `${plate} should be invalid`)
+    }
+  })
+})
+

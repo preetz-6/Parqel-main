@@ -5,6 +5,7 @@ import {
   BarChart3,
   ScrollText,
   ClipboardList,
+  Camera,
   QrCode,
   CarFront,
   Radio,
@@ -37,6 +38,7 @@ type NavItem = {
 const OPERATIONS_NAV: NavItem[] = [
   { href: '/admin', label: 'Overview', icon: <LayoutDashboard size={18} />, anyOf: ['zone:write', 'user:manage', 'import:csv'] },
   { href: '/security', label: 'Violation Queue', icon: <ClipboardList size={18} />, anyOf: ['violation:triage'] },
+  { href: '/security/report', label: 'Report a vehicle', icon: <Camera size={18} />, anyOf: ['violation:report'] },
   { href: '/admin/appeals', label: 'Appeals', icon: <Scale size={18} />, anyOf: ['appeal:review'] },
   { href: '/security/dispatch', label: 'Dispatch', icon: <Radio size={18} />, anyOf: ['dispatch:read'] },
   { href: '/security/scan', label: 'Gate scan', icon: <QrCode size={18} />, anyOf: ['pass:scan'] },

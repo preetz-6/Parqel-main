@@ -9,7 +9,7 @@ import { raiseViolationAlert, severityFor } from '../notifications'
 import { storeEvidence } from '../storage'
 import { assertTransition } from './access'
 import { readPlateFromEvidence } from './ocr'
-import { normalisePlate } from './plate-match'
+import { normalisePlate, isValidPlateFormat } from './plate-match'
 
 export class ViolationError extends Error {
   constructor(message: string) {
@@ -50,6 +50,9 @@ export async function createViolation(
 
   const plate = normalisePlate(input.plateEntered)
   if (plate.length < 4) throw new ViolationError('Enter the full number plate.')
+  if (!isValidPlateFormat(plate)) {
+    throw new ViolationError('Enter a valid registration number plate format (e.g. KA05MN1234).')
+  }
 
   // Written outside the transaction: a stored file with no row is harmless
   // litter, a row pointing at a missing file is a broken evidence record.
@@ -98,10 +101,7 @@ export async function createViolation(
   return { id: violation.id }
 }
 
-/**
- * Campus-wide default buffer duration for on-site verification (10–15 min based on campus size).
- */
-export const DEFAULT_BUFFER_MINUTES = 10
+
 
 async function loadForDecision(violationId: string) {
   const violation = await prisma.violation.findUnique({
@@ -207,63 +207,7 @@ export async function triageViolation(
   )
 }
 
-/**
- * On-site resolution during the buffer timer window.
- *
- * Transitions the violation to WARNED rather than REJECTED so that it silently
- * counts toward the vehicle owner's warning history for repeat-offender accountability.
- * Strictly checks server-side that the buffer timer has not expired.
- */
-export async function resolveViolationOnSite(
-  actor: Actor,
-  violationId: string,
-  note?: string | null,
-  ip?: string | null,
-): Promise<void> {
-  const violation = await loadForDecision(violationId)
 
-  assertCan(actor, 'violation:triage', { zoneId: violation.zoneId })
-  assertNotSelfDecided(actor, violation)
-  assertTransition(violation.status, ViolationStatus.WARNED)
-
-  const bufferMs = DEFAULT_BUFFER_MINUTES * 60 * 1000
-  const expiresAt = violation.triagedAt
-    ? new Date(violation.triagedAt.getTime() + bufferMs)
-    : null
-
-  if (!expiresAt || new Date() > expiresAt) {
-    throw new ViolationError(
-      'The buffer timer has expired. This report has been escalated to supervisor review.',
-    )
-  }
-
-  const ctx: AuditContext = { actorUserId: actor.userId, ip }
-
-  await audited(
-    ctx,
-    (tx) =>
-      tx.violation.update({
-        where: { id: violationId },
-        data: {
-          status: ViolationStatus.WARNED,
-          decidedById: actor.userId,
-          decidedAt: new Date(),
-          note: note?.trim()
-            ? violation.note
-              ? `${violation.note} | ${note.trim()}`
-              : note.trim()
-            : undefined,
-        },
-      }),
-    (updated) => ({
-      action: 'violation.resolve_on_site',
-      entity: 'Violation',
-      entityId: updated.id,
-      oldValue: { status: violation.status },
-      newValue: { status: updated.status, resolvedOnSite: true },
-    }),
-  )
-}
 
 /**
  * Unregistered vehicle resolution on site.
@@ -339,6 +283,7 @@ export async function decideViolation(
   actor: Actor,
   violationId: string,
   decision: 'APPROVED' | 'REJECTED',
+  options?: { matchedVehicleId?: string | null; note?: string | null },
   ip?: string | null,
 ): Promise<{ alerted: boolean }> {
   const violation = await loadForDecision(violationId)
@@ -361,22 +306,24 @@ export async function decideViolation(
     decision === 'APPROVED' ? ViolationStatus.APPROVED : ViolationStatus.REJECTED
   assertTransition(violation.status, target)
 
-  if (decision === 'APPROVED' && !violation.matchedVehicleId) {
+  const matchedVehicleId = options?.matchedVehicleId ?? violation.matchedVehicleId
+
+  if (decision === 'APPROVED' && !matchedVehicleId) {
     throw new ViolationError(
       'Confirm which registered vehicle this refers to before approving — there is nobody to notify otherwise.',
     )
   }
 
   const owner =
-    decision === 'APPROVED' && violation.matchedVehicleId
+    decision === 'APPROVED' && matchedVehicleId
       ? await prisma.vehicle.findUnique({
-          where: { id: violation.matchedVehicleId },
+          where: { id: matchedVehicleId },
           select: { id: true, userId: true },
         })
       : null
 
   if (decision === 'APPROVED' && !owner) {
-    throw new ViolationError('The matched vehicle is no longer in the registry.')
+    throw new ViolationError('The matched vehicle is not in the registry.')
   }
 
   const ctx: AuditContext = { actorUserId: actor.userId, ip }
@@ -386,7 +333,13 @@ export async function decideViolation(
     async (tx) => {
       const updated = await tx.violation.update({
         where: { id: violationId },
-        data: { status: target, decidedById: actor.userId, decidedAt: new Date() },
+        data: {
+          status: target,
+          decidedById: actor.userId,
+          decidedAt: new Date(),
+          ...(matchedVehicleId ? { matchedVehicleId } : {}),
+          ...(options?.note ? { note: options.note.trim() } : {}),
+        },
       })
 
       // If already alerted at triage, check existing alert

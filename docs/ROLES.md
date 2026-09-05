@@ -51,8 +51,11 @@ model is deliberate — a visitor is a pass, not a user.
 An `Auditor` read-only role was considered and dropped; `ADMIN` (full audit)
 covers it. Similarly, `PARKING_ADMIN` was merged into `SUPERVISOR` + `ADMIN`
 because its permission set was a strict superset of Supervisor's — pure
-addition rather than a different kind of power. Guard remains separate because
-it lacks `violation:decide`, a real gap in authority.
+addition rather than a different kind of power. Guard remains distinct from
+Supervisor because it lacks `appeal:review`, `zone:write`, and spot allocation
+authority. Authoritative on-scene verification allows guards to directly confirm
+or dismiss violations within their assigned zone, while Supervisors handle appeals
+and zone management.
 
 ---
 
@@ -149,8 +152,8 @@ zone-aware `can()` / `assertCan()` check before mutating anything.
 | View reports I filed | own | own | ✓ | ✓ |
 | View violations against me | own | own | ✓ | ✓ |
 | Triage / verify a report | — | scope | ✓ | — |
-| Confirm OCR plate match | — | propose | ✓ | — |
-| Approve / reject violation | — | — | ✓ | — |
+| Confirm OCR plate match | — | scope | ✓ | — |
+| Approve / reject violation | — | scope | ✓ | — |
 | Void violation (reason logged) | — | — | ✓ | — |
 | **Hard-delete a violation** | — | — | — | — |
 | File appeal on own violation | ✓ | ✓ | ✓ | — |

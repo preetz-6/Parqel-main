@@ -73,3 +73,16 @@ export function nearMatchConfidence(edits: number): number {
 
 /** Near misses worth showing a human. Beyond this it is a different vehicle. */
 export const MAX_NEAR_MATCH_DISTANCE = 2
+
+/**
+ * Basic syntax check for Indian registration plates (state-code format and BH series).
+ * Catches obvious typos and non-plates before a report is dispatched.
+ */
+export function isValidPlateFormat(raw: string): boolean {
+  const norm = normalisePlate(raw)
+  // Standard format: e.g. KA05MN1234, DL3CAA1111, MH12AB1234
+  const standardPattern = /^[A-Z]{2}[0-9]{1,2}[A-Z]{0,3}[0-9]{1,4}$/
+  // BH series: e.g. 22BH1234AA
+  const bhPattern = /^[0-9]{2}BH[0-9]{4}[A-Z]{1,2}$/
+  return norm.length >= 6 && norm.length <= 12 && (standardPattern.test(norm) || bhPattern.test(norm))
+}

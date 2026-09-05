@@ -1,5 +1,13 @@
 import 'server-only'
 
+// Force IPv4-first DNS resolution. Supabase's pooler advertises both IPv6 and
+// IPv4, but the IPv6 addresses have no route from most residential/campus
+// networks. Without this, Node hangs 12-25 seconds on IPv6 before falling back
+// to IPv4 — long enough for Supabase to close the connection (P1001/P1017).
+import dns from 'node:dns'
+dns.setDefaultResultOrder('ipv4first')
+
+import pg from 'pg'
 import { PrismaPg } from '@prisma/adapter-pg'
 import { PrismaClient } from '@/generated/prisma/client'
 
@@ -16,8 +24,19 @@ const globalForPrisma = globalThis as unknown as {
 }
 
 function createClient() {
+  const pool = new pg.Pool({
+    connectionString,
+    // Keep TCP connections alive so Supabase's pooler doesn't silently drop
+    // idle sockets mid-request.
+    keepAlive: true,
+    // Cap the pool — dev server hot-reloads can otherwise leak connections.
+    max: 5,
+    // Don't wait forever for a connection from the pool.
+    connectionTimeoutMillis: 10_000,
+  })
+
   return new PrismaClient({
-    adapter: new PrismaPg({ connectionString }),
+    adapter: new PrismaPg(pool),
   })
 }
 
@@ -27,3 +46,4 @@ export const prisma = globalForPrisma.prisma ?? createClient()
 if (process.env.NODE_ENV !== 'production') {
   globalForPrisma.prisma = prisma
 }
+

@@ -40,8 +40,8 @@ export function canViewViolation(actor: Actor, violation: ViewableViolation): bo
 
 /** Statuses a violation may move to from its current one. */
 const TRANSITIONS: Record<ViolationStatus, ViolationStatus[]> = {
-  SUBMITTED: [ViolationStatus.TRIAGED, ViolationStatus.REJECTED, ViolationStatus.VOIDED],
-  TRIAGED: [ViolationStatus.WARNED, ViolationStatus.APPROVED, ViolationStatus.REJECTED, ViolationStatus.VOIDED],
+  SUBMITTED: [ViolationStatus.APPROVED, ViolationStatus.REJECTED, ViolationStatus.VOIDED, ViolationStatus.TRIAGED],
+  TRIAGED: [ViolationStatus.APPROVED, ViolationStatus.REJECTED, ViolationStatus.VOIDED, ViolationStatus.WARNED],
   WARNED: [ViolationStatus.VOIDED],
   APPROVED: [ViolationStatus.VOIDED],
   REJECTED: [ViolationStatus.VOIDED],

@@ -121,7 +121,7 @@ describe('zone scoping', () => {
   test('holdsPermission ignores scope entirely, for cheap pre-checks', () => {
     // Used to refuse before parsing an 8 MB upload; never sufficient alone.
     assert.equal(holdsPermission(scopedGuard, 'violation:triage'), true)
-    assert.equal(holdsPermission(scopedGuard, 'violation:decide'), false)
+    assert.equal(holdsPermission(scopedGuard, 'appeal:review'), false)
     assert.equal(holdsPermission(actor([{ role: Role.EMPLOYEE }]), 'unknownVehicle:log'), false)
   })
 

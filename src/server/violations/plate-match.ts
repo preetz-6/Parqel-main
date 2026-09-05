@@ -8,9 +8,10 @@ import {
   editDistance,
   nearMatchConfidence,
   normalisePlate,
+  isValidPlateFormat,
 } from './plate-normalise'
 
-export { normalisePlate }
+export { normalisePlate, isValidPlateFormat }
 
 /**
  * Plate resolution against the organisation's own registry.

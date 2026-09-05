@@ -19,7 +19,15 @@ const field =
   'focus:border-neutral-900 focus:outline-none dark:border-neutral-700 dark:bg-neutral-900 ' +
   'dark:text-neutral-100 dark:focus:border-neutral-400'
 
-export function ReportForm({ zones, ocrEnabled = false }: { zones: Zone[]; ocrEnabled?: boolean }) {
+export function ReportForm({
+  zones,
+  ocrEnabled = false,
+  redirectPrefix,
+}: {
+  zones: Zone[]
+  ocrEnabled?: boolean
+  redirectPrefix?: string
+}) {
   const router = useRouter()
   const photoInput = useRef<HTMLInputElement>(null)
   const scanInput = useRef<HTMLInputElement>(null)
@@ -149,7 +157,8 @@ export function ReportForm({ zones, ocrEnabled = false }: { zones: Zone[]; ocrEn
       return
     }
 
-    router.push(`/report/${data.id}`)
+    const dest = redirectPrefix ? `${redirectPrefix}/${data.id}` : `/report/${data.id}`
+    router.push(dest)
     router.refresh()
   }
 
