@@ -29,8 +29,12 @@ function createClient() {
     // Keep TCP connections alive so Supabase's pooler doesn't silently drop
     // idle sockets mid-request.
     keepAlive: true,
-    // Cap the pool — dev server hot-reloads can otherwise leak connections.
-    max: 5,
+    // Serverless: each function instance gets its own pool. Supabase's
+    // PgBouncer limits session-mode connections to pool_size (default 15).
+    // With multiple Vercel instances, 5 × N easily exceeds that. Use 2.
+    max: 2,
+    // Release idle connections quickly — serverless functions are short-lived.
+    idleTimeoutMillis: 10_000,
     // Don't wait forever for a connection from the pool.
     connectionTimeoutMillis: 10_000,
   })
