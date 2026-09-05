@@ -285,7 +285,7 @@ export default async function HomePage() {
         <h2 className="text-sm font-medium text-neutral-700 dark:text-neutral-300">
           Violation summary
         </h2>
-        <div className="mt-2 grid grid-cols-3 gap-3">
+        <div className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-3">
           <SummaryCard label="Reports filed" value={myReports} />
           <SummaryCard label="Formal violations" value={againstMe} warn={againstMe > 0} />
           <SummaryCard label="Warnings" value={warnings} />

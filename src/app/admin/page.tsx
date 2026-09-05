@@ -287,7 +287,7 @@ export default async function AdminOverviewPage() {
               {zonesList.map((z) => (
                 <div
                   key={z.id}
-                  className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 text-xs"
+                  className="flex flex-col gap-1.5 px-4 py-3 text-xs sm:flex-row sm:items-center sm:justify-between sm:gap-3"
                 >
                   <div>
                     <span className="font-semibold text-neutral-900 dark:text-neutral-100">
@@ -297,7 +297,7 @@ export default async function AdminOverviewPage() {
                       <span className="ml-1.5 text-neutral-400">({z.building})</span>
                     )}
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <span className="rounded bg-neutral-100 px-2 py-0.5 font-medium text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300">
                       {z.vehicleClass.replace('_', ' ')}
                     </span>

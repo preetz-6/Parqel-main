@@ -126,7 +126,7 @@ async function loadForDecision(violationId: string) {
 
 /**
  * Triage: a guard confirms the report is real and, crucially, confirms *which*
- * registered vehicle it refers to. This notifies the owner and starts the buffer timer.
+ * registered vehicle it refers to. This raises an alert to the owner.
  */
 export async function triageViolation(
   actor: Actor,
@@ -213,7 +213,7 @@ export async function triageViolation(
  * Unregistered vehicle resolution on site.
  *
  * When no matched registered vehicle exists, the report bypasses owner notification
- * and buffer timers. Guard creates a standalone UnknownVehicleLog entry and closes
+ * entirely. Guard creates a standalone UnknownVehicleLog entry and closes
  * the violation as VOIDED.
  */
 export async function logUnregisteredViolation(
