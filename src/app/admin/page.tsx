@@ -123,7 +123,7 @@ export default async function AdminOverviewPage() {
                 )}
                 {pendingAppealsCount > 0 && (
                   <span className="rounded bg-blue-100 px-2 py-0.5 text-blue-800 dark:bg-blue-950/60 dark:text-blue-300">
-                    {pendingAppealsCount} appeals pending
+                    {pendingAppealsCount} Appeals pending
                   </span>
                 )}
                 {activeDispatchesCount > 0 && (
