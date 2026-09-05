@@ -168,7 +168,7 @@ async function main() {
       phone: '+919000000002',
       userType: UserType.STAFF,
       department: 'Facilities',
-      roles: [{ role: Role.PARKING_ADMIN, scopeZoneIds: [] }],
+      roles: [{ role: Role.SUPERVISOR, scopeZoneIds: [] }],
     },
     {
       employeeId: 'SEC001',
@@ -219,7 +219,8 @@ async function main() {
   }
 
   // ── vehicles ────────────────────────────────────────────
-  const approvedBy = created.PRK001
+  // Admin holds vehicle:approve
+  const approvedBy = created.ADM001
 
   const vehicles = [
     {
@@ -275,7 +276,7 @@ async function main() {
         spotId: facultySpot.id,
         userId: created.FAC101,
         startDate: new Date('2026-06-01'),
-        assignedById: approvedBy,
+        assignedById: created.PRK001,
       },
     })
   }
@@ -299,7 +300,7 @@ Default password for all users: ${DEFAULT_PASSWORD}
 
    ADM001    Priya Nair        Administrator (admin duties only)
    EMP001    Priya Nair        Employee (personal parking account)
-   PRK001    Rakesh Iyer       Parking Admin
+   PRK001    Rakesh Iyer       Supervisor (Facilities)
    SEC001    Anand Rao         Security Supervisor
    SEC002    Lakshmi Devi      Guard (scoped to Main Lot + Bike Shed)
    FAC101    Dr. Meera K.      Employee

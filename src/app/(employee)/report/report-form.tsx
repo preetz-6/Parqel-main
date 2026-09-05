@@ -38,6 +38,20 @@ export function ReportForm({ zones, ocrEnabled = false }: { zones: Zone[]; ocrEn
   const [scanning, setScanning] = useState(false)
   const [scanHint, setScanHint] = useState<string | null>(null)
 
+  // Silent GPS — captured on mount, never shown to the user.
+  const gpsRef = useRef<{ latitude: number; longitude: number } | null>(null)
+
+  useEffect(() => {
+    if (!navigator.geolocation) return
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        gpsRef.current = { latitude: pos.coords.latitude, longitude: pos.coords.longitude }
+      },
+      () => { /* denied or unavailable — silently skip */ },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 },
+    )
+  }, [])
+
   // The object URL is created in the change handler rather than an effect —
   // deriving it in an effect sets state during render and cascades. The ref
   // exists only so unmount can revoke whatever the current URL is.
@@ -118,6 +132,12 @@ export function ReportForm({ zones, ocrEnabled = false }: { zones: Zone[]; ocrEn
           : `Other: ${otherReason.trim()}`
         : note.trim()
     if (fullNote) body.set('note', fullNote)
+
+    // Attach GPS if available — silent, no user prompt.
+    if (gpsRef.current) {
+      body.set('latitude', String(gpsRef.current.latitude))
+      body.set('longitude', String(gpsRef.current.longitude))
+    }
 
     const response = await fetch('/api/violations', { method: 'POST', body })
     const data = (await response.json().catch(() => ({}))) as { id?: string; error?: string }

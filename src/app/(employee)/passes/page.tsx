@@ -4,7 +4,6 @@ import { requireActor } from '@/server/dal'
 import { can, scopedZoneIds } from '@/server/permissions'
 import { remainingQuota } from '@/server/passes/service'
 import { PassStatus } from '@/generated/prisma/enums'
-import { PageHeader } from '@/components/page-header'
 import { IssuePassForm } from './issue-form'
 import { PassList } from './pass-list'
 
@@ -50,12 +49,13 @@ export default async function PassesPage() {
     : `${quota} left this week${active.length > 0 ? ` · ${active.length} active` : ''}`
 
   return (
-    <main className="mx-auto w-full max-w-2xl p-6">
-      <PageHeader
-        title="Visitor passes"
-        subtitle={subtitle}
-        employeeId={actor.employeeId}
-      />
+    <>
+      <h1 className="text-lg font-semibold text-neutral-900 dark:text-neutral-50">
+        Visitor passes
+      </h1>
+      <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
+        {subtitle}
+      </p>
 
       {quota !== null && quota <= 0 ? (
         <p className="mt-6 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300">
@@ -67,6 +67,6 @@ export default async function PassesPage() {
       )}
 
       <PassList passes={passes} />
-    </main>
+    </>
   )
 }

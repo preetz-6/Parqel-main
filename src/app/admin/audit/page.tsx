@@ -12,7 +12,7 @@ function one(value: string | string[] | undefined): string | undefined {
 export default async function AuditPage(props: PageProps<'/admin/audit'>) {
   const actor = await requireActor()
 
-  if (!can(actor, 'audit:read') && !can(actor, 'audit:read:parking')) redirect('/admin')
+  if (!can(actor, 'audit:read')) redirect('/admin')
 
   const params = await props.searchParams
   const filters = {

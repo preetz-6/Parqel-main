@@ -17,7 +17,7 @@ import type { TxClient } from '../audit'
  * assertion. That record is what makes escalation defensible later.
  *
  * v1 emits IN_APP and PUSH only. SMS and VOICE exist in the enum but are
- * unreachable until TRAI DLT registration is done — see docs/DESIGN.md §3.
+ * unreachable until TRAI DLT registration is done â€” see docs/DESIGN.md Â§3.
  */
 
 /** How loud a violation type is. Blocking a fire lane is not a parking dispute. */
@@ -83,7 +83,7 @@ export async function raiseViolationAlert(
           alertId: alert.id,
           userId: input.ownerUserId,
           channel,
-          // In-app is delivered the moment the row exists — the owner reads it
+          // In-app is delivered the moment the row exists â€” the owner reads it
           // from their own list. Push has to leave the building first.
           status:
             channel === NotificationChannel.IN_APP
@@ -102,7 +102,7 @@ export async function raiseViolationAlert(
  * Delivers queued push notifications.
  *
  * v1 has one provider: the server log. Real FCM needs a Firebase service
- * account and device tokens per user, neither of which exists yet — so this
+ * account and device tokens per user, neither of which exists yet â€” so this
  * mirrors the OTP pattern rather than pretending to send.
  */
 export async function flushQueuedPush(): Promise<{ sent: number; failed: number }> {

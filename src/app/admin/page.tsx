@@ -1,76 +1,361 @@
 import Link from 'next/link'
 import { prisma } from '@/lib/prisma'
 import { requireActor } from '@/server/dal'
-import { can } from '@/server/permissions'
-import { VehicleStatus, ZoneVehicleClass } from '@/generated/prisma/enums'
+import { holdsPermission, scopedZoneIds } from '@/server/permissions'
+import {
+  AppealDecision,
+  DispatchStatus,
+  VehicleStatus,
+  ViolationStatus,
+  ZoneVehicleClass,
+} from '@/generated/prisma/enums'
+import { VIOLATION_LABELS } from '@/components/status-badge'
+import { DEFAULT_BUFFER_MINUTES } from '@/server/violations/service'
+import { ArrowRight, CheckCircle2 } from 'lucide-react'
 
 export default async function AdminOverviewPage() {
   const actor = await requireActor()
+  const scope = scopedZoneIds(actor)
+  const now = Date.now()
+  const bufferMs = DEFAULT_BUFFER_MINUTES * 60 * 1000
 
-  const [users, vehicles, pendingVehicles, zones, spots, bikeZones] = await Promise.all([
+  const [
+    usersCount,
+    vehiclesCount,
+    pendingVehiclesCount,
+    zonesCount,
+    spotsCount,
+    bikeZonesCount,
+    zonesList,
+    submittedCount,
+    triagedViolations,
+    pendingAppealsCount,
+    activeDispatchesCount,
+    recentViolations,
+  ] = await Promise.all([
     prisma.user.count(),
     prisma.vehicle.count(),
     prisma.vehicle.count({ where: { status: VehicleStatus.PENDING } }),
     prisma.parkingZone.count(),
     prisma.parkingSpot.count(),
     prisma.parkingZone.count({ where: { vehicleClass: ZoneVehicleClass.TWO_WHEELER } }),
+    prisma.parkingZone.findMany({
+      select: {
+        id: true,
+        name: true,
+        allocationType: true,
+        vehicleClass: true,
+        capacity: true,
+        building: true,
+      },
+      orderBy: { name: 'asc' },
+    }),
+    prisma.violation.count({
+      where: {
+        status: ViolationStatus.SUBMITTED,
+        ...(scope === null ? {} : { zoneId: { in: scope } }),
+      },
+    }),
+    prisma.violation.findMany({
+      where: {
+        status: ViolationStatus.TRIAGED,
+        ...(scope === null ? {} : { zoneId: { in: scope } }),
+      },
+      select: { id: true, triagedAt: true, createdAt: true },
+    }),
+    prisma.appeal.count({
+      where: { decision: AppealDecision.PENDING },
+    }),
+    prisma.dispatch.count({
+      where: { status: { not: DispatchStatus.RESOLVED } },
+    }),
+    prisma.violation.findMany({
+      where: {
+        status: { in: [ViolationStatus.SUBMITTED, ViolationStatus.TRIAGED] },
+        ...(scope === null ? {} : { zoneId: { in: scope } }),
+      },
+      select: {
+        id: true,
+        type: true,
+        status: true,
+        plateEntered: true,
+        createdAt: true,
+        triagedAt: true,
+        zone: { select: { name: true } },
+        reportedBy: { select: { name: true, employeeId: true } },
+        matchedVehicle: { select: { plateNumber: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 6,
+    }),
   ])
 
-  const stats = [
-    { label: 'People on roster', value: users },
-    { label: 'Registered vehicles', value: vehicles },
-    { label: 'Awaiting approval', value: pendingVehicles },
-    { label: 'Zones', value: zones },
-    { label: 'Numbered spots', value: spots },
-    { label: 'Two-wheeler zones', value: bikeZones, hint: 'capacity-only' },
-  ]
+  // Split triaged violations into running buffer vs awaiting supervisor decision
+  let activeBufferCount = 0
+  let awaitingDecisionCount = 0
+  for (const v of triagedViolations) {
+    const triagedMs = v.triagedAt ? v.triagedAt.getTime() : v.createdAt.getTime()
+    if (now < triagedMs + bufferMs) {
+      activeBufferCount++
+    } else {
+      awaitingDecisionCount++
+    }
+  }
 
-  const empty = users === 0 && zones === 0
+  const canTriage = holdsPermission(actor, 'violation:triage')
+  const totalQueueUrgent = submittedCount + awaitingDecisionCount
 
   return (
-    <main className="py-6">
-      <h1 className="text-lg font-semibold text-neutral-900 dark:text-neutral-50">
-        Parking administration
-      </h1>
-
-      {empty ? (
-        <div className="mt-6 rounded-xl border border-dashed border-neutral-300 p-8 text-center dark:border-neutral-700">
-          <p className="text-sm text-neutral-600 dark:text-neutral-300">
-            Nothing loaded yet. Start by importing the roster.
+    <div className="space-y-8 py-4">
+      {/* ── Header ─────────────────────────────────────────────── */}
+      <header className="flex flex-wrap items-center justify-between gap-4 border-b border-neutral-200 pb-5 dark:border-neutral-800">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight text-neutral-900 dark:text-neutral-50">
+            Operations Dashboard
+          </h1>
+          <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
+            Campus parking accountability, live enforcement queue, and field operations
           </p>
-          {can(actor, 'import:csv') && (
-            <Link
-              href="/admin/import"
-              className="mt-4 inline-block rounded-lg bg-neutral-900 px-4 py-2 text-sm font-medium text-white dark:bg-neutral-100 dark:text-neutral-900"
-            >
-              Import data
-            </Link>
-          )}
         </div>
-      ) : (
-        <dl className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3">
-          {stats.map((stat) => (
-            <div
-              key={stat.label}
-              className="rounded-xl border border-neutral-200 p-4 dark:border-neutral-800"
+        <div className="flex items-center gap-2">
+          {actor.roles.map((r) => (
+            <span
+              key={r.role}
+              className="rounded-full bg-neutral-100 px-3 py-1 text-xs font-semibold text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300"
             >
-              <dd className="text-2xl font-semibold tabular-nums text-neutral-900 dark:text-neutral-50">
-                {stat.value}
-              </dd>
-              <dt className="mt-0.5 text-xs text-neutral-500 dark:text-neutral-400">
-                {stat.label}
-                {stat.hint && (
-                  <span className="text-neutral-400 dark:text-neutral-500"> · {stat.hint}</span>
-                )}
-              </dt>
-            </div>
+              {r.role}
+            </span>
           ))}
-        </dl>
+          <span className="font-mono text-xs text-neutral-400">({actor.employeeId})</span>
+        </div>
+      </header>
+
+      {/* ── Quick Alert / Urgent Status Bar ─────────────────────── */}
+      {(totalQueueUrgent > 0 || pendingAppealsCount > 0 || activeDispatchesCount > 0) && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50/70 p-4 dark:border-amber-900/60 dark:bg-amber-950/20">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <span className="flex h-2.5 w-2.5 rounded-full bg-amber-500 animate-pulse" />
+              <span className="text-sm font-medium text-amber-950 dark:text-amber-200">
+                Action needed:
+              </span>
+              <div className="flex flex-wrap items-center gap-2 text-xs font-semibold text-amber-800 dark:text-amber-300">
+                {submittedCount > 0 && (
+                  <span className="rounded bg-amber-100 px-2 py-0.5 dark:bg-amber-900/50">
+                    {submittedCount} reports awaiting triage
+                  </span>
+                )}
+                {awaitingDecisionCount > 0 && (
+                  <span className="rounded bg-rose-100 px-2 py-0.5 text-rose-800 dark:bg-rose-950/60 dark:text-rose-300">
+                    {awaitingDecisionCount} awaiting supervisor decision
+                  </span>
+                )}
+                {pendingAppealsCount > 0 && (
+                  <span className="rounded bg-blue-100 px-2 py-0.5 text-blue-800 dark:bg-blue-950/60 dark:text-blue-300">
+                    {pendingAppealsCount} appeals pending
+                  </span>
+                )}
+                {activeDispatchesCount > 0 && (
+                  <span className="rounded bg-red-100 px-2 py-0.5 text-red-800 dark:bg-red-950/60 dark:text-red-300">
+                    {activeDispatchesCount} active dispatches
+                  </span>
+                )}
+              </div>
+            </div>
+            {canTriage && (
+              <Link
+                href="/security"
+                className="inline-flex items-center gap-1.5 rounded-lg bg-amber-700 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-amber-800 dark:bg-amber-600 dark:hover:bg-amber-500"
+              >
+                Go to Queue
+                <ArrowRight size={14} />
+              </Link>
+            )}
+          </div>
+        </div>
       )}
 
-      <p className="mt-8 text-xs text-neutral-400 dark:text-neutral-500">
-        Slot allocation, the violation queue and the audit viewer land next.
-      </p>
-    </main>
+      {/* ── Campus Infrastructure & Capacity Overview ───────────── */}
+      <section className="space-y-4">
+        <h2 className="text-base font-semibold text-neutral-900 dark:text-neutral-100">
+          Campus Parking Infrastructure
+        </h2>
+
+        <dl className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+          <div className="rounded-xl border border-neutral-200 p-4 dark:border-neutral-800">
+            <dd className="text-2xl font-bold tabular-nums text-neutral-900 dark:text-neutral-50">
+              {zonesCount}
+            </dd>
+            <dt className="mt-0.5 text-xs text-neutral-500 dark:text-neutral-400">Total Zones</dt>
+          </div>
+          <div className="rounded-xl border border-neutral-200 p-4 dark:border-neutral-800">
+            <dd className="text-2xl font-bold tabular-nums text-neutral-900 dark:text-neutral-50">
+              {spotsCount}
+            </dd>
+            <dt className="mt-0.5 text-xs text-neutral-500 dark:text-neutral-400">Numbered Spots</dt>
+          </div>
+          <div className="rounded-xl border border-neutral-200 p-4 dark:border-neutral-800">
+            <dd className="text-2xl font-bold tabular-nums text-neutral-900 dark:text-neutral-50">
+              {bikeZonesCount}
+            </dd>
+            <dt className="mt-0.5 text-xs text-neutral-500 dark:text-neutral-400">Two-wheeler Sheds</dt>
+          </div>
+          <div className="rounded-xl border border-neutral-200 p-4 dark:border-neutral-800">
+            <dd className="text-2xl font-bold tabular-nums text-neutral-900 dark:text-neutral-50">
+              {usersCount}
+            </dd>
+            <dt className="mt-0.5 text-xs text-neutral-500 dark:text-neutral-400">Roster Users</dt>
+          </div>
+          <div className="rounded-xl border border-neutral-200 p-4 dark:border-neutral-800">
+            <dd className="text-2xl font-bold tabular-nums text-neutral-900 dark:text-neutral-50">
+              {vehiclesCount}
+            </dd>
+            <dt className="mt-0.5 text-xs text-neutral-500 dark:text-neutral-400">Registered Vehicles</dt>
+          </div>
+          <div className="rounded-xl border border-neutral-200 p-4 dark:border-neutral-800">
+            <dd className="text-2xl font-bold tabular-nums text-neutral-900 dark:text-neutral-50">
+              {pendingVehiclesCount}
+            </dd>
+            <dt className="mt-0.5 text-xs text-neutral-500 dark:text-neutral-400">Pending Approval</dt>
+          </div>
+        </dl>
+      </section>
+
+      {/* ── Active Queue Spotlight ──────────────────────────────── */}
+      {canTriage && (
+        <section className="space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-base font-semibold text-neutral-900 dark:text-neutral-100">
+                Active Violation Queue
+              </h2>
+              <p className="text-xs text-neutral-500 dark:text-neutral-400">
+                Review and decide recent reports directly
+              </p>
+            </div>
+            <Link
+              href="/security"
+              className="inline-flex items-center gap-1 text-xs font-semibold text-neutral-700 hover:text-neutral-900 dark:text-neutral-300 dark:hover:text-neutral-100"
+            >
+              Full queue view
+              <ArrowRight size={13} />
+            </Link>
+          </div>
+
+          {recentViolations.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-neutral-300 p-8 text-center dark:border-neutral-800">
+              <CheckCircle2 size={24} className="mx-auto text-emerald-500" />
+              <p className="mt-2 text-sm font-medium text-neutral-700 dark:text-neutral-300">
+                Queue is clear
+              </p>
+              <p className="mt-0.5 text-xs text-neutral-400 dark:text-neutral-500">
+                No reports awaiting triage or decisions right now.
+              </p>
+            </div>
+          ) : (
+            <div className="overflow-hidden rounded-xl border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900">
+              <ul className="divide-y divide-neutral-100 dark:divide-neutral-800">
+                {recentViolations.map((v) => {
+                  const plate = v.matchedVehicle?.plateNumber ?? v.plateEntered ?? '—'
+                  const isSubmitted = v.status === ViolationStatus.SUBMITTED
+                  const triagedMs = v.triagedAt ? v.triagedAt.getTime() : v.createdAt.getTime()
+                  const isBufferExpired = !isSubmitted && now >= triagedMs + bufferMs
+
+                  return (
+                    <li
+                      key={v.id}
+                      className="flex flex-wrap items-center justify-between gap-3 p-4 transition hover:bg-neutral-50 dark:hover:bg-neutral-800/40"
+                    >
+                      <div className="flex items-center gap-3">
+                        <span className="font-mono text-xs font-bold text-neutral-800 dark:text-neutral-200">
+                          {plate}
+                        </span>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-medium text-neutral-900 dark:text-neutral-100">
+                              {VIOLATION_LABELS[v.type] ?? v.type}
+                            </span>
+                            <span className="text-[11px] text-neutral-400">· {v.zone.name}</span>
+                          </div>
+                          <p className="mt-0.5 text-[11px] text-neutral-400">
+                            Reported by {v.reportedBy.name} ({v.reportedBy.employeeId}) ·{' '}
+                            {v.createdAt.toLocaleTimeString('en-IN', {
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-3">
+                        {isSubmitted ? (
+                          <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 ring-1 ring-amber-200 ring-inset dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-900">
+                            Awaiting triage
+                          </span>
+                        ) : isBufferExpired ? (
+                          <span className="rounded-full bg-rose-50 px-2 py-0.5 text-xs font-medium text-rose-700 ring-1 ring-rose-200 ring-inset dark:bg-rose-950/40 dark:text-rose-300 dark:ring-rose-900">
+                            Awaiting decision
+                          </span>
+                        ) : (
+                          <span className="rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 ring-1 ring-blue-200 ring-inset dark:bg-blue-950/40 dark:text-blue-300 dark:ring-blue-900">
+                            Buffer running
+                          </span>
+                        )}
+
+                        <Link
+                          href={`/security/${v.id}`}
+                          className="rounded-lg border border-neutral-300 px-2.5 py-1 text-xs font-semibold text-neutral-700 transition hover:bg-neutral-100 hover:text-neutral-900 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+                        >
+                          Review
+                        </Link>
+                      </div>
+                    </li>
+                  )
+                })}
+              </ul>
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* ── Zone Configuration Breakdown ────────────────────────── */}
+      {zonesList.length > 0 && (
+        <section className="space-y-3">
+          <h2 className="text-base font-semibold text-neutral-900 dark:text-neutral-100">
+            Zone Configuration & Allocation
+          </h2>
+          <div className="overflow-hidden rounded-xl border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900">
+            <div className="divide-y divide-neutral-100 dark:divide-neutral-800">
+              {zonesList.map((z) => (
+                <div
+                  key={z.id}
+                  className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 text-xs"
+                >
+                  <div>
+                    <span className="font-semibold text-neutral-900 dark:text-neutral-100">
+                      {z.name}
+                    </span>
+                    {z.building && (
+                      <span className="ml-1.5 text-neutral-400">({z.building})</span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="rounded bg-neutral-100 px-2 py-0.5 font-medium text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300">
+                      {z.vehicleClass.replace('_', ' ')}
+                    </span>
+                    <span className="rounded bg-neutral-100 px-2 py-0.5 font-medium text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300">
+                      {z.allocationType}
+                    </span>
+                    <span className="font-semibold tabular-nums text-neutral-800 dark:text-neutral-200">
+                      {z.capacity} slots
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+      )}
+    </div>
   )
 }

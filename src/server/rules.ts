@@ -43,9 +43,11 @@ export function assertNotSelfDecided(
 /**
  * Rule 2 — the appeal reviewer must differ from whoever decided the violation.
  *
- * In a small pilot with a single Parking Admin this forces the appeal up to an
- * Admin. That is the intended behaviour, not an edge case to work around: an
- * appeal reviewed by the original decider is not an appeal.
+ * In a small pilot with two Supervisors on different shifts, cross-shift
+ * rotation ensures the appeal reviewer differs from the original decider.
+ * If both are unavailable the appeal falls up to an Admin. That is the
+ * intended behaviour, not an edge case to work around: an appeal reviewed
+ * by the original decider is not an appeal.
  */
 export function assertImpartialAppealReviewer(
   actor: Actor,
@@ -69,7 +71,7 @@ export function assertImpartialAppealReviewer(
 /**
  * Rule 3 — only ADMIN may grant or revoke roles.
  *
- * The permission matrix already withholds `role:assign` from PARKING_ADMIN;
+ * The permission matrix already withholds `role:assign` from SUPERVISOR;
  * this is the belt-and-braces check at the mutation site so that a future
  * widening of the matrix cannot silently hand out privilege escalation.
  */

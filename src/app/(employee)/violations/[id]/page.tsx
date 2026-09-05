@@ -7,7 +7,7 @@ import { ViolationStatus } from '@/generated/prisma/enums'
 import { StatusBadge, VIOLATION_LABELS } from '@/components/status-badge'
 import { AppealForm } from './appeal-form'
 
-export default async function ViolationDetailPage(props: PageProps<'/violations/[id]'>) {
+export default async function ViolationDetailPage(props: { params: Promise<{ id: string }> }) {
   const actor = await requireActor()
   const { id } = await props.params
 
@@ -40,12 +40,12 @@ export default async function ViolationDetailPage(props: PageProps<'/violations/
     isAccused && violation.status === ViolationStatus.APPROVED && violation.appeals.length === 0
 
   return (
-    <main className="mx-auto w-full max-w-2xl p-6">
+    <>
       <Link
         href="/violations"
         className="text-sm text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-100"
       >
-        ← My reports
+        ← Reports & Appeals
       </Link>
 
       <header className="mt-4 flex flex-wrap items-start justify-between gap-3">
@@ -114,6 +114,6 @@ export default async function ViolationDetailPage(props: PageProps<'/violations/
           Security has not reviewed this yet.
         </p>
       )}
-    </main>
+    </>
   )
 }

@@ -3,7 +3,7 @@ import 'server-only'
 import { prisma } from '@/lib/prisma'
 import { ViolationStatus, type ViolationType } from '@/generated/prisma/enums'
 import { audited, type AuditContext, type AuditEntry } from '../audit'
-import { assertCan, type Actor } from '../permissions'
+import { assertCan, can, ForbiddenError, type Actor } from '../permissions'
 import { assertNotSelfDecided, assertVoidNotDelete } from '../rules'
 import { raiseViolationAlert, severityFor } from '../notifications'
 import { storeEvidence } from '../storage'
@@ -21,7 +21,7 @@ export class ViolationError extends Error {
 /**
  * Reporting.
  *
- * The reporter supplies a plate but never learns who owns it — resolution
+ * The reporter supplies a plate but never learns who owns it â€” resolution
  * happens at triage, by someone authorized to see the registry. A reporter
  * who could type plates and read back owner names would have built a
  * lookup service, which is the thing this design exists to avoid.
@@ -34,6 +34,8 @@ export async function createViolation(
     spotId?: string | null
     plateEntered: string
     note?: string | null
+    latitude?: number | null
+    longitude?: number | null
     photo: File
   },
   ip?: string | null,
@@ -55,7 +57,7 @@ export async function createViolation(
 
   // A suggestion for the person who triages this, nothing more. Returns null
   // on every failure path, so an unreachable vendor cannot stop a report being
-  // filed — and it never sets matchedVehicleId.
+  // filed â€” and it never sets matchedVehicleId.
   const reading = await readPlateFromEvidence(evidence.key)
 
   const ctx: AuditContext = { actorUserId: actor.userId, ip }
@@ -75,6 +77,8 @@ export async function createViolation(
           ocrConfidence: reading?.confidence ?? null,
           imageOriginal: evidence.key,
           note: input.note?.trim() || null,
+          latitude: input.latitude ?? null,
+          longitude: input.longitude ?? null,
         },
       }),
     (created) => ({
@@ -94,6 +98,11 @@ export async function createViolation(
   return { id: violation.id }
 }
 
+/**
+ * Campus-wide default buffer duration for on-site verification (10–15 min based on campus size).
+ */
+export const DEFAULT_BUFFER_MINUTES = 10
+
 async function loadForDecision(violationId: string) {
   const violation = await prisma.violation.findUnique({
     where: { id: violationId },
@@ -104,6 +113,10 @@ async function loadForDecision(violationId: string) {
       zoneId: true,
       reportedById: true,
       matchedVehicleId: true,
+      triagedAt: true,
+      plateEntered: true,
+      imageOriginal: true,
+      note: true,
       zone: { select: { name: true } },
     },
   })
@@ -113,8 +126,7 @@ async function loadForDecision(violationId: string) {
 
 /**
  * Triage: a guard confirms the report is real and, crucially, confirms *which*
- * registered vehicle it refers to. This is the human-in-the-loop step that
- * `matchedVehicleId` waits for.
+ * registered vehicle it refers to. This notifies the owner and starts the buffer timer.
  */
 export async function triageViolation(
   actor: Actor,
@@ -128,12 +140,101 @@ export async function triageViolation(
   assertNotSelfDecided(actor, violation)
   assertTransition(violation.status, ViolationStatus.TRIAGED)
 
-  if (input.matchedVehicleId) {
-    const vehicle = await prisma.vehicle.findUnique({
-      where: { id: input.matchedVehicleId },
-      select: { id: true },
-    })
-    if (!vehicle) throw new ViolationError('That vehicle is not in the registry.')
+  const owner = input.matchedVehicleId
+    ? await prisma.vehicle.findUnique({
+        where: { id: input.matchedVehicleId },
+        select: { id: true, userId: true },
+      })
+    : null
+
+  if (input.matchedVehicleId && !owner) {
+    throw new ViolationError('That vehicle is not in the registry.')
+  }
+
+  const ctx: AuditContext = { actorUserId: actor.userId, ip }
+
+  await audited(
+    ctx,
+    async (tx) => {
+      const updated = await tx.violation.update({
+        where: { id: violationId },
+        data: {
+          status: ViolationStatus.TRIAGED,
+          matchedVehicleId: input.matchedVehicleId,
+          triagedById: actor.userId,
+          triagedAt: new Date(),
+          note: input.note?.trim() || undefined,
+        },
+      })
+
+      let alertId: string | null = null
+      if (owner) {
+        const alert = await raiseViolationAlert(tx, {
+          violationId: updated.id,
+          vehicleId: owner.id,
+          ownerUserId: owner.userId,
+          type: violation.type,
+          zoneName: violation.zone.name,
+          createdById: actor.userId,
+        })
+        alertId = alert.alertId
+      }
+
+      return { updated, alertId }
+    },
+    ({ updated, alertId }) => {
+      const entries: AuditEntry[] = [
+        {
+          action: 'violation.triage',
+          entity: 'Violation',
+          entityId: updated.id,
+          oldValue: { status: violation.status, matchedVehicleId: violation.matchedVehicleId },
+          newValue: { status: updated.status, matchedVehicleId: updated.matchedVehicleId },
+        },
+      ]
+
+      if (alertId) {
+        entries.push({
+          action: 'alert.raise',
+          entity: 'Alert',
+          entityId: alertId,
+          newValue: { violationId: updated.id, severity: severityFor(violation.type) },
+        })
+      }
+
+      return entries
+    },
+  )
+}
+
+/**
+ * On-site resolution during the buffer timer window.
+ *
+ * Transitions the violation to WARNED rather than REJECTED so that it silently
+ * counts toward the vehicle owner's warning history for repeat-offender accountability.
+ * Strictly checks server-side that the buffer timer has not expired.
+ */
+export async function resolveViolationOnSite(
+  actor: Actor,
+  violationId: string,
+  note?: string | null,
+  ip?: string | null,
+): Promise<void> {
+  const violation = await loadForDecision(violationId)
+
+  assertCan(actor, 'violation:triage', { zoneId: violation.zoneId })
+  assertNotSelfDecided(actor, violation)
+  assertTransition(violation.status, ViolationStatus.WARNED)
+
+  const bufferMs = DEFAULT_BUFFER_MINUTES * 60 * 1000
+  const expiresAt = violation.triagedAt
+    ? new Date(violation.triagedAt.getTime() + bufferMs)
+    : null
+
+  if (!expiresAt || new Date() > expiresAt) {
+    throw new ViolationError(
+      'The buffer timer has expired. This report has been escalated to supervisor review.',
+    )
   }
 
   const ctx: AuditContext = { actorUserId: actor.userId, ip }
@@ -144,27 +245,95 @@ export async function triageViolation(
       tx.violation.update({
         where: { id: violationId },
         data: {
-          status: ViolationStatus.TRIAGED,
-          matchedVehicleId: input.matchedVehicleId,
-          triagedById: actor.userId,
-          triagedAt: new Date(),
-          note: input.note?.trim() || undefined,
+          status: ViolationStatus.WARNED,
+          decidedById: actor.userId,
+          decidedAt: new Date(),
+          note: note?.trim()
+            ? violation.note
+              ? `${violation.note} | ${note.trim()}`
+              : note.trim()
+            : undefined,
         },
       }),
     (updated) => ({
-      action: 'violation.triage',
+      action: 'violation.resolve_on_site',
       entity: 'Violation',
       entityId: updated.id,
-      oldValue: { status: violation.status, matchedVehicleId: violation.matchedVehicleId },
-      newValue: { status: updated.status, matchedVehicleId: updated.matchedVehicleId },
+      oldValue: { status: violation.status },
+      newValue: { status: updated.status, resolvedOnSite: true },
     }),
   )
 }
 
 /**
- * The decision. Approving is what notifies the owner, so it is the only place
- * a matched vehicle becomes mandatory — an approved violation with nobody to
- * tell is a dead record.
+ * Unregistered vehicle resolution on site.
+ *
+ * When no matched registered vehicle exists, the report bypasses owner notification
+ * and buffer timers. Guard creates a standalone UnknownVehicleLog entry and closes
+ * the violation as VOIDED.
+ */
+export async function logUnregisteredViolation(
+  actor: Actor,
+  violationId: string,
+  note?: string | null,
+  ip?: string | null,
+): Promise<{ unknownLogId: string }> {
+  const violation = await loadForDecision(violationId)
+
+  assertCan(actor, 'violation:triage', { zoneId: violation.zoneId })
+  assertCan(actor, 'unknownVehicle:log', { zoneId: violation.zoneId })
+  assertNotSelfDecided(actor, violation)
+
+  const ctx: AuditContext = { actorUserId: actor.userId, ip }
+
+  const result = await audited(
+    ctx,
+    async (tx) => {
+      const unknownLog = await tx.unknownVehicleLog.create({
+        data: {
+          plate: violation.plateEntered ?? 'UNKNOWN',
+          zoneId: violation.zoneId,
+          loggedById: actor.userId,
+          note: note?.trim() || `Logged from violation report on-site (${violation.type})`,
+          image: violation.imageOriginal,
+        },
+      })
+
+      const updated = await tx.violation.update({
+        where: { id: violationId },
+        data: {
+          status: ViolationStatus.VOIDED,
+          voidReason: 'Logged as unregistered/unknown vehicle on-site',
+          decidedById: actor.userId,
+          decidedAt: new Date(),
+        },
+      })
+
+      return { unknownLog, updated }
+    },
+    ({ unknownLog, updated }) => [
+      {
+        action: 'unknownVehicle.log',
+        entity: 'UnknownVehicleLog',
+        entityId: unknownLog.id,
+        newValue: { plate: unknownLog.plate, zoneId: unknownLog.zoneId },
+      },
+      {
+        action: 'violation.void',
+        entity: 'Violation',
+        entityId: updated.id,
+        oldValue: { status: violation.status },
+        newValue: { status: updated.status, voidReason: 'Logged as unregistered vehicle' },
+      },
+    ],
+  )
+
+  return { unknownLogId: result.unknownLog.id }
+}
+
+/**
+ * The decision. Approving is what formalizes the violation and closes supervisor review.
+ * Dismissing (REJECTED) can be done by a supervisor or a triage guard for false reports.
  */
 export async function decideViolation(
   actor: Actor,
@@ -174,7 +343,18 @@ export async function decideViolation(
 ): Promise<{ alerted: boolean }> {
   const violation = await loadForDecision(violationId)
 
-  assertCan(actor, 'violation:decide', { zoneId: violation.zoneId })
+  if (decision === 'APPROVED') {
+    assertCan(actor, 'violation:decide', { zoneId: violation.zoneId })
+  } else {
+    // Dismissing false/mistaken reports is allowed for triagers or deciders
+    if (
+      !can(actor, 'violation:decide', { zoneId: violation.zoneId }) &&
+      !can(actor, 'violation:triage', { zoneId: violation.zoneId })
+    ) {
+      throw new ForbiddenError('violation:triage', violation.zoneId)
+    }
+  }
+
   assertNotSelfDecided(actor, violation)
 
   const target =
@@ -209,7 +389,15 @@ export async function decideViolation(
         data: { status: target, decidedById: actor.userId, decidedAt: new Date() },
       })
 
-      if (decision !== 'APPROVED' || !owner) return { updated, alertId: null as string | null }
+      // If already alerted at triage, check existing alert
+      const existingAlert = await tx.alert.findFirst({
+        where: { violationId: updated.id },
+        select: { id: true },
+      })
+
+      if (decision !== 'APPROVED' || !owner || existingAlert) {
+        return { updated, alertId: null as string | null }
+      }
 
       const alert = await raiseViolationAlert(tx, {
         violationId: updated.id,
@@ -247,36 +435,4 @@ export async function decideViolation(
   )
 
   return { alerted: result.alertId !== null }
-}
-
-/** Violations are never deleted. */
-export async function voidViolation(
-  actor: Actor,
-  violationId: string,
-  reason: string,
-  ip?: string | null,
-): Promise<void> {
-  const violation = await loadForDecision(violationId)
-
-  assertCan(actor, 'violation:void', { zoneId: violation.zoneId })
-  assertTransition(violation.status, ViolationStatus.VOIDED)
-  const voidReason = assertVoidNotDelete(reason)
-
-  const ctx: AuditContext = { actorUserId: actor.userId, ip }
-
-  await audited(
-    ctx,
-    (tx) =>
-      tx.violation.update({
-        where: { id: violationId },
-        data: { status: ViolationStatus.VOIDED, voidReason, decidedById: actor.userId },
-      }),
-    (updated) => ({
-      action: 'violation.void',
-      entity: 'Violation',
-      entityId: updated.id,
-      oldValue: { status: violation.status },
-      newValue: { status: updated.status, voidReason },
-    }),
-  )
 }

@@ -7,7 +7,7 @@ import { can, type Actor } from '../permissions'
  * Who may see a violation and its evidence photo.
  *
  * The subtle case is the accused. Before a human has confirmed the plate
- * match, `matchedVehicleId` is a *guess* — showing the photo to whoever owns
+ * match, `matchedVehicleId` is a *guess* â€” showing the photo to whoever owns
  * the guessed plate would leak someone else's evidence to an uninvolved
  * person on the strength of a typo. So the owner gains access only once the
  * violation is approved, which is also the moment they are notified and
@@ -25,12 +25,14 @@ export function canViewViolation(actor: Actor, violation: ViewableViolation): bo
   // You can always see what you reported.
   if (violation.reportedById === actor.userId) return true
 
-  // Guards, supervisors and parking admins — subject to zone scope.
+  // Guards, supervisors and parking admins â€” subject to zone scope.
   if (can(actor, 'violation:read:any', { zoneId: violation.zoneId })) return true
 
   // The accused, once the match has been confirmed by a human.
   const decided =
-    violation.status === ViolationStatus.APPROVED || violation.status === ViolationStatus.VOIDED
+    violation.status === ViolationStatus.APPROVED ||
+    violation.status === ViolationStatus.WARNED ||
+    violation.status === ViolationStatus.VOIDED
   if (decided && violation.matchedVehicle?.userId === actor.userId) return true
 
   return false
@@ -38,8 +40,9 @@ export function canViewViolation(actor: Actor, violation: ViewableViolation): bo
 
 /** Statuses a violation may move to from its current one. */
 const TRANSITIONS: Record<ViolationStatus, ViolationStatus[]> = {
-  SUBMITTED: [ViolationStatus.TRIAGED, ViolationStatus.REJECTED],
-  TRIAGED: [ViolationStatus.APPROVED, ViolationStatus.REJECTED],
+  SUBMITTED: [ViolationStatus.TRIAGED, ViolationStatus.REJECTED, ViolationStatus.VOIDED],
+  TRIAGED: [ViolationStatus.WARNED, ViolationStatus.APPROVED, ViolationStatus.REJECTED, ViolationStatus.VOIDED],
+  WARNED: [ViolationStatus.VOIDED],
   APPROVED: [ViolationStatus.VOIDED],
   REJECTED: [ViolationStatus.VOIDED],
   VOIDED: [],

@@ -34,7 +34,6 @@ enum Role {
   EMPLOYEE
   GUARD
   SUPERVISOR
-  PARKING_ADMIN
   ADMIN
 }
 
@@ -104,6 +103,7 @@ enum ViolationType {
 enum ViolationStatus {
   SUBMITTED
   TRIAGED
+  WARNED
   APPROVED
   REJECTED
   VOIDED
@@ -454,6 +454,8 @@ model Violation {
   decidedById      String?         @map("decided_by")
   decidedAt        DateTime?       @map("decided_at")
   voidReason       String?         @map("void_reason")
+  latitude         Float?
+  longitude        Float?
   createdAt        DateTime        @default(now()) @map("created_at")
   updatedAt        DateTime        @updatedAt @map("updated_at")
 

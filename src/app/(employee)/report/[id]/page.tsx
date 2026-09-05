@@ -5,7 +5,7 @@ import { requireActor } from '@/server/dal'
 import { canViewViolation } from '@/server/violations/access'
 import { StatusBadge, VIOLATION_LABELS } from '@/components/status-badge'
 
-export default async function ReportConfirmationPage(props: PageProps<'/report/[id]'>) {
+export default async function ReportConfirmationPage(props: { params: Promise<{ id: string }> }) {
   const actor = await requireActor()
   const { id } = await props.params
 
@@ -28,7 +28,7 @@ export default async function ReportConfirmationPage(props: PageProps<'/report/[
   if (!violation || !canViewViolation(actor, violation)) notFound()
 
   return (
-    <main className="mx-auto w-full max-w-lg p-6">
+    <>
       <div className="rounded-xl border border-neutral-200 p-6 dark:border-neutral-800">
         <div className="flex items-start justify-between gap-4">
           <div>
@@ -90,6 +90,6 @@ export default async function ReportConfirmationPage(props: PageProps<'/report/[
           Report another
         </Link>
       </div>
-    </main>
+    </>
   )
 }

@@ -24,6 +24,7 @@ export default async function SecurityDetailPage(props: PageProps<'/security/[id
       ocrConfidence: true,
       note: true,
       createdAt: true,
+      triagedAt: true,
       reportedById: true,
       zoneId: true,
       matchedVehicleId: true,
@@ -60,7 +61,7 @@ export default async function SecurityDetailPage(props: PageProps<'/security/[id
       : []
 
   return (
-    <main className="mx-auto w-full max-w-2xl p-6">
+    <div className="mx-auto w-full max-w-2xl">
       <Link
         href="/security"
         className="text-sm text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-100"
@@ -132,13 +133,14 @@ export default async function SecurityDetailPage(props: PageProps<'/security/[id
       <ReviewPanel
         violationId={violation.id}
         status={violation.status}
+        triagedAt={violation.triagedAt?.toISOString() ?? null}
         matchedVehicleId={violation.matchedVehicleId}
         candidates={candidates}
         mayTriage={mayTriage}
         mayDecide={mayDecide}
         isOwnReport={isOwnReport}
       />
-    </main>
+    </div>
   )
 }
 

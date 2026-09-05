@@ -54,18 +54,18 @@ describe('permission matrix', () => {
   })
 
   test('only ADMIN may assign roles', () => {
-    for (const role of [Role.EMPLOYEE, Role.GUARD, Role.SUPERVISOR, Role.PARKING_ADMIN]) {
+    for (const role of [Role.EMPLOYEE, Role.GUARD, Role.SUPERVISOR]) {
       assert.equal(can(actor([{ role }]), 'role:assign'), false, `${role} must not assign roles`)
     }
     assert.equal(can(actor([{ role: Role.ADMIN }]), 'role:assign'), true)
   })
 
-  test('a parking admin cannot manage users, an admin cannot allocate slots', () => {
-    const parkingAdmin = actor([{ role: Role.PARKING_ADMIN }])
+  test('a supervisor can allocate slots but not manage users, an admin cannot allocate slots', () => {
+    const supervisor = actor([{ role: Role.SUPERVISOR }])
     const admin = actor([{ role: Role.ADMIN }])
 
-    assert.equal(can(parkingAdmin, 'spot:assign'), true)
-    assert.equal(can(parkingAdmin, 'user:manage'), false)
+    assert.equal(can(supervisor, 'spot:assign'), true)
+    assert.equal(can(supervisor, 'user:manage'), false)
 
     assert.equal(can(admin, 'user:manage'), true)
     assert.equal(can(admin, 'spot:assign'), false)
@@ -176,7 +176,7 @@ describe('role validity windows', () => {
 })
 
 describe('integrity rules', () => {
-  const reviewer = actor([{ role: Role.PARKING_ADMIN }], 'reviewer-1')
+  const reviewer = actor([{ role: Role.SUPERVISOR }], 'reviewer-1')
 
   test('rule 1: a reporter cannot decide their own report', () => {
     assert.throws(
@@ -204,7 +204,7 @@ describe('integrity rules', () => {
   })
 
   test('rule 3: non-admins cannot assign roles, nobody edits their own', () => {
-    assert.throws(() => assertMayAssignRoles(actor([{ role: Role.PARKING_ADMIN }])), IntegrityError)
+    assert.throws(() => assertMayAssignRoles(actor([{ role: Role.SUPERVISOR }])), IntegrityError)
     assert.doesNotThrow(() => assertMayAssignRoles(actor([{ role: Role.ADMIN }])))
 
     const admin = actor([{ role: Role.ADMIN }], 'admin-1')

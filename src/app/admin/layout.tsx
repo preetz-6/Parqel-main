@@ -8,12 +8,12 @@ import { AdminSidebar } from '@/components/admin-sidebar'
  * holds none of these, redirect them home rather than showing an empty shell.
  */
 const GATE_PERMISSIONS: Permission[] = [
+  'zone:write',
   'import:csv',
   'appeal:review',
   'event:create',
   'analytics:read',
   'audit:read',
-  'audit:read:parking',
 ]
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
@@ -25,7 +25,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
 
   return (
     <div className="flex min-h-screen flex-col md:flex-row">
-      <AdminSidebar actor={actor} variant="admin" />
+      <AdminSidebar actor={actor} />
 
       <main className="flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-5xl px-6 py-6">

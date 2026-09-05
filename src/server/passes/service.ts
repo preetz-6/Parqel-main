@@ -2,9 +2,9 @@ import 'server-only'
 
 import { randomInt } from 'node:crypto'
 import { prisma } from '@/lib/prisma'
-import { PassStatus, Role, VehicleClass } from '@/generated/prisma/enums'
+import { PassStatus, VehicleClass } from '@/generated/prisma/enums'
 import { audited, type AuditContext } from '../audit'
-import { assertCan, hasRole, type Actor } from '../permissions'
+import { assertCan, holdsPermission, type Actor } from '../permissions'
 import { normalisePlate } from '../violations/plate-normalise'
 
 export class PassError extends Error {
@@ -47,12 +47,8 @@ function generateCode(): string {
 
 /** Only plain employees are quota-limited. */
 function isQuotaLimited(actor: Actor): boolean {
-  return (
-    !hasRole(actor, Role.GUARD) &&
-    !hasRole(actor, Role.SUPERVISOR) &&
-    !hasRole(actor, Role.PARKING_ADMIN) &&
-    !hasRole(actor, Role.ADMIN)
-  )
+  // Any role that holds 'pass:revoke:any' is staff-level and exempt from quotas.
+  return !holdsPermission(actor, 'pass:revoke:any')
 }
 
 export async function remainingQuota(actor: Actor): Promise<number | null> {

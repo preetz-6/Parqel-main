@@ -11,7 +11,7 @@ export default async function SecurityLayout({ children }: { children: React.Rea
 
   return (
     <div className="flex min-h-screen flex-col md:flex-row">
-      <AdminSidebar actor={actor} variant="security" />
+      <AdminSidebar actor={actor} />
 
       <main className="flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-5xl px-6 py-6">

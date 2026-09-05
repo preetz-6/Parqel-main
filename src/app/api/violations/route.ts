@@ -14,6 +14,8 @@ const fields = z.object({
   spotId: z.string().optional(),
   plateEntered: z.string().trim().min(4, 'Enter the full number plate.'),
   note: z.string().trim().max(500).optional(),
+  latitude: z.coerce.number().min(-90).max(90).optional(),
+  longitude: z.coerce.number().min(-180).max(180).optional(),
 })
 
 export async function POST(request: Request) {
@@ -41,6 +43,8 @@ export async function POST(request: Request) {
       spotId: form.get('spotId') || undefined,
       plateEntered: form.get('plateEntered'),
       note: form.get('note') || undefined,
+      latitude: form.get('latitude') || undefined,
+      longitude: form.get('longitude') || undefined,
     })
 
     if (!parsed.success) {
@@ -52,7 +56,13 @@ export async function POST(request: Request) {
 
     const { id } = await createViolation(
       actor,
-      { ...parsed.data, spotId: parsed.data.spotId ?? null, photo },
+      {
+        ...parsed.data,
+        spotId: parsed.data.spotId ?? null,
+        latitude: parsed.data.latitude ?? null,
+        longitude: parsed.data.longitude ?? null,
+        photo,
+      },
       await clientIp(),
     )
 

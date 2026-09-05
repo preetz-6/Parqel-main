@@ -1,41 +1,145 @@
-import Link from 'next/link'
 import { prisma } from '@/lib/prisma'
 import { requireActor } from '@/server/dal'
 import { scopedZoneIds } from '@/server/permissions'
-import { ViolationStatus } from '@/generated/prisma/enums'
-import { StatusBadge, VIOLATION_LABELS } from '@/components/status-badge'
+import { DispatchStatus, ViolationStatus } from '@/generated/prisma/enums'
+import { DEFAULT_BUFFER_MINUTES } from '@/server/violations/service'
+import {
+  ActiveAlertCard,
+  BufferTimerCard,
+  WorklistCard,
+  AwaitingDecisionSection,
+  type ActiveAlertItem,
+  type BufferTimerItem,
+  type WorklistItem,
+  type AwaitingDecisionItem,
+} from './queue-client'
 
 export default async function SecurityQueuePage() {
   const actor = await requireActor()
   const scope = scopedZoneIds(actor)
+  const now = Date.now()
+  const bufferMs = DEFAULT_BUFFER_MINUTES * 60 * 1000
 
-  const violations = await prisma.violation.findMany({
-    where: {
-      status: { in: [ViolationStatus.SUBMITTED, ViolationStatus.TRIAGED] },
-      ...(scope === null ? {} : { zoneId: { in: scope } }),
-    },
-    select: {
-      id: true,
-      type: true,
-      status: true,
-      plateEntered: true,
-      createdAt: true,
-      reportedById: true,
-      zone: { select: { name: true } },
-      reportedBy: { select: { name: true, employeeId: true } },
-      matchedVehicle: { select: { plateNumber: true } },
-    },
-    orderBy: [{ status: 'asc' }, { createdAt: 'asc' }],
-    take: 100,
-  })
+  const [myDispatches, violations] = await Promise.all([
+    // Zone 1 — Live dispatches assigned to this guard
+    prisma.dispatch.findMany({
+      where: {
+        assignedGuardId: actor.userId,
+        status: { not: DispatchStatus.RESOLVED },
+      },
+      select: {
+        id: true,
+        alertId: true,
+        createdAt: true,
+        alert: {
+          select: {
+            id: true,
+            severity: true,
+            message: true,
+            vehicle: { select: { plateNumber: true } },
+            createdBy: { select: { name: true, employeeId: true } },
+          },
+        },
+      },
+      orderBy: { createdAt: 'asc' },
+    }),
 
-  const awaitingTriage = violations.filter((v) => v.status === ViolationStatus.SUBMITTED)
-  const awaitingDecision = violations.filter((v) => v.status === ViolationStatus.TRIAGED)
+    // Zones 2, 3 & 4 — Violations in scope
+    prisma.violation.findMany({
+      where: {
+        status: { in: [ViolationStatus.SUBMITTED, ViolationStatus.TRIAGED] },
+        ...(scope === null ? {} : { zoneId: { in: scope } }),
+      },
+      select: {
+        id: true,
+        type: true,
+        status: true,
+        plateEntered: true,
+        createdAt: true,
+        triagedAt: true,
+        reportedById: true,
+        zone: { select: { name: true } },
+        reportedBy: { select: { name: true, employeeId: true } },
+        matchedVehicle: { select: { id: true, plateNumber: true } },
+      },
+      orderBy: { createdAt: 'asc' },
+      take: 100,
+    }),
+  ])
+
+  // ── Zone 1: Active alerts ──────────────────────────────────
+  const activeAlerts: ActiveAlertItem[] = myDispatches.map((d) => ({
+    dispatchId: d.id,
+    alertId: d.alert.id,
+    severity: d.alert.severity,
+    message: d.alert.message,
+    plateNumber: d.alert.vehicle?.plateNumber ?? null,
+    raisedByName: d.alert.createdBy.name,
+    raisedByEmployeeId: d.alert.createdBy.employeeId,
+    createdAtISO: d.createdAt.toISOString(),
+  }))
+
+  // ── Zone 2 vs Zone 4 partition ─────────────────────────────
+  const bufferTimers: (BufferTimerItem & { expiresMs: number })[] = []
+  const awaitingDecision: AwaitingDecisionItem[] = []
+  const awaitingVerification: WorklistItem[] = []
+
+  for (const v of violations) {
+    if (v.status === ViolationStatus.SUBMITTED) {
+      awaitingVerification.push({
+        id: v.id,
+        type: v.type,
+        plate: v.matchedVehicle?.plateNumber ?? v.plateEntered,
+        hasMatchedVehicle: !!v.matchedVehicle,
+        zoneName: v.zone.name,
+        reportedByName: v.reportedBy.name,
+        reportedByEmployeeId: v.reportedBy.employeeId,
+        createdAtISO: v.createdAt.toISOString(),
+        isOwnReport: v.reportedById === actor.userId,
+      })
+    } else if (v.status === ViolationStatus.TRIAGED) {
+      const triagedMs = v.triagedAt ? v.triagedAt.getTime() : v.createdAt.getTime()
+      const expiresMs = triagedMs + bufferMs
+
+      if (now < expiresMs) {
+        // Active buffer countdown running
+        bufferTimers.push({
+          id: v.id,
+          type: v.type,
+          plate: v.matchedVehicle?.plateNumber ?? v.plateEntered ?? '—',
+          zoneName: v.zone.name,
+          triagedAtISO: new Date(triagedMs).toISOString(),
+          expiresAtISO: new Date(expiresMs).toISOString(),
+          reportedByName: v.reportedBy.name,
+          expiresMs,
+        })
+      } else {
+        // Buffer expired -> Awaiting Supervisor decision
+        awaitingDecision.push({
+          id: v.id,
+          type: v.type,
+          plate: v.matchedVehicle?.plateNumber ?? v.plateEntered,
+          hasMatchedVehicle: !!v.matchedVehicle,
+          zoneName: v.zone.name,
+          reportedByName: v.reportedBy.name,
+          reportedByEmployeeId: v.reportedBy.employeeId,
+          createdAtISO: v.createdAt.toISOString(),
+          triagedAtISO: v.triagedAt ? v.triagedAt.toISOString() : null,
+        })
+      }
+    }
+  }
+
+  // Zone 2: Sorted soonest-expiring first (so the ones about to escalate are on top)
+  bufferTimers.sort((a, b) => a.expiresMs - b.expiresMs)
+
+  // Zone 3: Sorted oldest-first (already sorted by createdAt: 'asc')
 
   return (
-    <>
-      <div className="mb-6">
-        <h1 className="text-lg font-semibold text-neutral-900 dark:text-neutral-50">
+    <div className="space-y-6">
+      {/* ── Header ─────────────────────────────────────────────── */}
+      <header>
+        <h1 className="text-xl font-bold text-neutral-900 dark:text-neutral-50">
           Security queue
         </h1>
         <p className="mt-0.5 text-sm text-neutral-500 dark:text-neutral-400">
@@ -43,104 +147,75 @@ export default async function SecurityQueuePage() {
             ? 'All zones'
             : `${scope.length} zone${scope.length === 1 ? '' : 's'} in your scope`}
         </p>
-      </div>
+      </header>
 
-      <Section
-        title="Awaiting verification"
-        empty="Nothing waiting to be verified."
-        violations={awaitingTriage}
-        actorId={actor.userId}
-      />
-
-      <Section
-        title="Awaiting decision"
-        empty="Nothing waiting on a decision."
-        violations={awaitingDecision}
-        actorId={actor.userId}
-      />
-    </>
-  )
-}
-
-type Row = {
-  id: string
-  type: string
-  status: ViolationStatus
-  plateEntered: string | null
-  createdAt: Date
-  reportedById: string
-  zone: { name: string }
-  reportedBy: { name: string; employeeId: string }
-  matchedVehicle: { plateNumber: string } | null
-}
-
-function Section({
-  title,
-  empty,
-  violations,
-  actorId,
-}: {
-  title: string
-  empty: string
-  violations: Row[]
-  actorId: string
-}) {
-  return (
-    <section className="mt-6">
-      <h2 className="mb-3 text-sm font-medium text-neutral-700 dark:text-neutral-300">
-        {title}
-        <span className="ml-2 tabular-nums text-neutral-400">{violations.length}</span>
-      </h2>
-
-      {violations.length === 0 ? (
-        <p className="rounded-xl border border-dashed border-neutral-300 px-4 py-6 text-center text-sm text-neutral-400 dark:border-neutral-700">
-          {empty}
-        </p>
-      ) : (
-        <ul className="divide-y divide-neutral-100 overflow-hidden rounded-xl border border-neutral-200 dark:divide-neutral-800 dark:border-neutral-800">
-          {violations.map((violation) => {
-            const isOwnReport = violation.reportedById === actorId
-            return (
-              <li key={violation.id}>
-                <Link
-                  href={`/security/${violation.id}`}
-                  className="flex items-center justify-between gap-4 px-4 py-3 hover:bg-neutral-50 dark:hover:bg-neutral-900"
-                >
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-mono text-sm font-medium text-neutral-900 dark:text-neutral-100">
-                        {violation.matchedVehicle?.plateNumber ?? violation.plateEntered}
-                      </span>
-                      <StatusBadge status={violation.status} />
-                      {isOwnReport && (
-                        // Surfaced early so a reviewer does not open it, work
-                        // through the match, and only then hit rule 1.
-                        <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">
-                          Your report
-                        </span>
-                      )}
-                    </div>
-                    <p className="mt-0.5 truncate text-sm text-neutral-500 dark:text-neutral-400">
-                      {VIOLATION_LABELS[violation.type] ?? violation.type} · {violation.zone.name}
-                    </p>
-                  </div>
-                  <time
-                    dateTime={violation.createdAt.toISOString()}
-                    className="shrink-0 text-xs text-neutral-400"
-                  >
-                    {violation.createdAt.toLocaleString('en-IN', {
-                      day: 'numeric',
-                      month: 'short',
-                      hour: '2-digit',
-                      minute: '2-digit',
-                    })}
-                  </time>
-                </Link>
-              </li>
-            )
-          })}
-        </ul>
+      {/* ── Zone 1 — Active alerts (if any, top of page, most urgent) ── */}
+      {activeAlerts.length > 0 && (
+        <section className="space-y-3">
+          <div className="flex items-center gap-2">
+            <span className="inline-block h-2 w-2 rounded-full bg-red-600 animate-ping" />
+            <h2 className="text-sm font-semibold uppercase tracking-wider text-red-600 dark:text-red-400">
+              Active alerts ({activeAlerts.length})
+            </h2>
+          </div>
+          <div className="space-y-3">
+            {activeAlerts.map((item) => (
+              <ActiveAlertCard key={item.dispatchId} item={item} />
+            ))}
+          </div>
+        </section>
       )}
-    </section>
+
+      {/* ── Zone 2 — Active buffer timers ──────────────────────── */}
+      {bufferTimers.length > 0 && (
+        <section className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-neutral-900 dark:text-neutral-100">
+              Active buffer timers
+            </h2>
+            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+              {bufferTimers.length} running
+            </span>
+          </div>
+          <div className="space-y-3">
+            {bufferTimers.map((item) => (
+              <BufferTimerCard key={item.id} item={item} />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* ── Zone 3 — Awaiting verification (Guard's main worklist) ─ */}
+      <section className="space-y-3">
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-neutral-900 dark:text-neutral-100">
+            Awaiting verification
+          </h2>
+          <span className="tabular-nums text-xs text-neutral-400">
+            {awaitingVerification.length} {awaitingVerification.length === 1 ? 'report' : 'reports'}
+          </span>
+        </div>
+
+        {awaitingVerification.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-neutral-300 p-8 text-center dark:border-neutral-800">
+            <p className="text-sm font-medium text-neutral-600 dark:text-neutral-400">
+              Nothing awaiting verification.
+            </p>
+            <p className="mt-1 text-xs text-neutral-400 dark:text-neutral-500">
+              New reports in your scope will appear here automatically.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {awaitingVerification.map((item) => (
+              <WorklistCard key={item.id} item={item} />
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* ── Zone 4 — Awaiting decision (Read-only, collapsed by default) ── */}
+      <AwaitingDecisionSection items={awaitingDecision} />
+    </div>
   )
 }

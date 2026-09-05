@@ -64,7 +64,6 @@ export const PERMISSIONS = [
   'role:assign',
   'analytics:read',
   'audit:read',
-  'audit:read:parking',
   'settings:manage',
 ] as const
 
@@ -75,10 +74,10 @@ export type Permission = (typeof PERMISSIONS)[number]
  * including for ADMIN, so that widening a role is always a visible diff.
  *
  * Two deliberate omissions:
- *  - No role holds `violation:decide` *and* `appeal:review` by accident;
- *    PARKING_ADMIN holds both but `rules.ts` forbids exercising them on the
- *    same violation.
- *  - PARKING_ADMIN does not hold `role:assign`. Only ADMIN does, so the
+ *  - SUPERVISOR holds both `violation:decide` and `appeal:review`, but
+ *    `rules.ts` forbids exercising them on the same violation. Cross-shift
+ *    rotation (morning/night) provides the second impartial reviewer.
+ *  - SUPERVISOR does not hold `role:assign`. Only ADMIN does, so the
  *    person allocating slots cannot promote themselves.
  */
 export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
@@ -111,33 +110,9 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
 
   SUPERVISOR: [
     'zone:read',
-    'vehicle:read:any',
-    'reservation:create',
-    'reservation:create:onBehalf',
-    'reservation:cancel:any',
-    'reservation:forceRelease',
-    'violation:report',
-    'violation:read:any',
-    'violation:triage',
-    'violation:decide',
-    'appeal:file',
-    'pass:issue',
-    'pass:scan',
-    'pass:revoke:any',
-    'unknownVehicle:log',
-    'alert:raise',
-    'dispatch:read',
-    'dispatch:assign',
-    'event:create',
-    'analytics:read',
-  ],
-
-  PARKING_ADMIN: [
-    'vehicle:approve',
-    'vehicle:read:any',
-    'zone:read',
     'zone:write',
     'spot:assign',
+    'vehicle:read:any',
     'reservation:create',
     'reservation:create:onBehalf',
     'reservation:cancel:any',
@@ -157,9 +132,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'dispatch:read',
     'dispatch:assign',
     'event:create',
-    'import:csv',
     'analytics:read',
-    'audit:read:parking',
   ],
 
   ADMIN: [

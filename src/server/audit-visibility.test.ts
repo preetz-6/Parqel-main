@@ -59,7 +59,7 @@ const RESTRICTED_ACTIONS = [
 ]
 
 describe('audit visibility', () => {
-  test('parking actions are visible with audit:read:parking', () => {
+  test('parking actions match parking action prefixes', () => {
     for (const action of PARKING_ACTIONS) {
       assert.equal(isParkingAction(action), true, `${action} should be visible`)
     }

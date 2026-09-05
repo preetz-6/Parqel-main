@@ -2,7 +2,6 @@ import { prisma } from '@/lib/prisma'
 import { requireActor } from '@/server/dal'
 import { ReservationStatus, VehicleStatus } from '@/generated/prisma/enums'
 import { zoneAvailability } from '@/server/reservations/service'
-import { PageHeader } from '@/components/page-header'
 import { BookingPanel } from './booking-panel'
 
 export default async function ParkingPage() {
@@ -37,12 +36,13 @@ export default async function ParkingPage() {
   ])
 
   return (
-    <main className="mx-auto w-full max-w-2xl p-6">
-      <PageHeader
-        title="Parking"
-        subtitle="Live availability. Booking applies to shared and event zones only."
-        employeeId={actor.employeeId}
-      />
+    <>
+      <h1 className="text-lg font-semibold text-neutral-900 dark:text-neutral-50">
+        Parking
+      </h1>
+      <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
+        Live availability. Booking applies to shared and event zones only.
+      </p>
 
       <BookingPanel
         zones={zones}
@@ -60,6 +60,6 @@ export default async function ParkingPage() {
           }
         }
       />
-    </main>
+    </>
   )
 }

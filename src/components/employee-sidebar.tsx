@@ -1,16 +1,10 @@
 import Link from 'next/link'
 import {
-  LayoutDashboard,
-  CalendarDays,
-  BarChart3,
-  ScrollText,
-  ClipboardList,
-  QrCode,
-  CarFront,
-  Radio,
-  Scale,
-  UploadCloud,
   Home,
+  ClipboardList,
+  Car,
+  Ticket,
+  CarFront,
   LogOut,
 } from 'lucide-react'
 import type { Actor, Permission } from '@/server/permissions'
@@ -23,10 +17,6 @@ const ROLE_LABELS: Record<string, string> = {
   ADMIN: 'Administrator',
 }
 
-/* ------------------------------------------------------------------ */
-/* Operations navigation                                              */
-/* ------------------------------------------------------------------ */
-
 type NavItem = {
   href: string
   label: string
@@ -34,22 +24,13 @@ type NavItem = {
   anyOf: Permission[]
 }
 
-const OPERATIONS_NAV: NavItem[] = [
-  { href: '/admin', label: 'Overview', icon: <LayoutDashboard size={18} />, anyOf: ['zone:write', 'user:manage', 'import:csv'] },
-  { href: '/security', label: 'Violation Queue', icon: <ClipboardList size={18} />, anyOf: ['violation:triage'] },
-  { href: '/admin/appeals', label: 'Appeals', icon: <Scale size={18} />, anyOf: ['appeal:review'] },
-  { href: '/security/dispatch', label: 'Dispatch', icon: <Radio size={18} />, anyOf: ['dispatch:read'] },
-  { href: '/security/scan', label: 'Gate scan', icon: <QrCode size={18} />, anyOf: ['pass:scan'] },
-  { href: '/security/unknown', label: 'Unknown vehicles', icon: <CarFront size={18} />, anyOf: ['unknownVehicle:log'] },
-  { href: '/admin/events', label: 'Events', icon: <CalendarDays size={18} />, anyOf: ['event:create'] },
-  { href: '/admin/analytics', label: 'Analytics', icon: <BarChart3 size={18} />, anyOf: ['analytics:read'] },
-  { href: '/admin/audit', label: 'Audit log', icon: <ScrollText size={18} />, anyOf: ['audit:read'] },
-  { href: '/admin/import', label: 'Import data', icon: <UploadCloud size={18} />, anyOf: ['import:csv'] },
+const EMPLOYEE_NAV: NavItem[] = [
+  { href: '/', label: 'Home', icon: <Home size={18} />, anyOf: ['zone:read'] },
+  { href: '/violations', label: 'Reports & Appeals', icon: <ClipboardList size={18} />, anyOf: ['violation:report'] },
+  { href: '/parking', label: 'Find parking', icon: <Car size={18} />, anyOf: ['reservation:create'] },
+  { href: '/passes', label: 'Visitor passes', icon: <Ticket size={18} />, anyOf: ['pass:issue'] },
+  { href: '/vehicles', label: 'My vehicles', icon: <CarFront size={18} />, anyOf: ['vehicle:request'] },
 ]
-
-/* ------------------------------------------------------------------ */
-/* Sidebar component                                                  */
-/* ------------------------------------------------------------------ */
 
 function filterNav(items: NavItem[], actor: Actor): NavItem[] {
   return items.filter((item) =>
@@ -58,29 +39,18 @@ function filterNav(items: NavItem[], actor: Actor): NavItem[] {
 }
 
 /**
- * Persistent sidebar for admin and security operations.
+ * Persistent sidebar for the employee dashboard.
  *
- * All features are unified under role permissions so supervisors and
- * administrators do not drop into an isolated sub-dashboard when viewing
- * queues, dispatch, or events.
+ * On mobile (below md) this renders as a horizontal top bar with a
+ * scrollable nav. On desktop it is a fixed-width left sidebar.
  */
-export function AdminSidebar({
-  actor,
-  variant,
-}: {
-  actor: Actor
-  variant?: 'admin' | 'security'
-}) {
-  const nav = filterNav(OPERATIONS_NAV, actor)
+export function EmployeeSidebar({ actor }: { actor: Actor }) {
+  const nav = filterNav(EMPLOYEE_NAV, actor)
   const roles = activeRoles(actor)
-
-  const isOnlyGuard = roles.length === 1 && roles[0].role === 'GUARD'
-  const isOnlyAdmin = roles.length === 1 && roles[0].role === 'ADMIN'
-  const sectionTitle = isOnlyGuard ? 'Security' : isOnlyAdmin ? 'Administration' : 'Operations'
 
   return (
     <>
-      {/* â”€â”€ Mobile top bar (below md) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+      {/* ── Mobile top bar (below md) ───────────────────────────── */}
       <div className="flex flex-col border-b border-neutral-200 bg-neutral-50 px-4 py-3 md:hidden dark:border-neutral-800 dark:bg-neutral-950">
         <div className="flex items-center justify-between">
           <Link href="/" className="text-sm font-bold tracking-tight text-neutral-900 dark:text-neutral-50">
@@ -113,16 +83,13 @@ export function AdminSidebar({
         </nav>
       </div>
 
-      {/* â”€â”€ Desktop sidebar (md and above) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+      {/* ── Desktop sidebar (md and above) ──────────────────────── */}
       <aside className="hidden md:flex md:w-60 md:shrink-0 md:flex-col md:border-r md:border-neutral-200 md:bg-neutral-50 dark:md:border-neutral-800 dark:md:bg-neutral-950">
         {/* Brand */}
         <div className="px-5 pt-6 pb-4">
           <Link href="/" className="text-base font-bold tracking-tight text-neutral-900 dark:text-neutral-50">
             Parqel
           </Link>
-          <p className="mt-0.5 text-[11px] font-medium uppercase tracking-widest text-neutral-400 dark:text-neutral-500">
-            {sectionTitle}
-          </p>
         </div>
 
         {/* Main nav */}

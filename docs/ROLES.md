@@ -35,22 +35,24 @@ nobody. `bookability.test.ts` pins both cases.
 
 ---
 
-## 2. The five roles
+## 2. The four roles
 
 | Role | Who | Purpose |
 |---|---|---|
 | `EMPLOYEE` | Staff, faculty, students | Park, book shared/event slots, report violations, appeal, host visitors |
 | `GUARD` | Gate and patrol security | Triage reports, scan passes, log unknown vehicles, respond to dispatch |
-| `SUPERVISOR` | Security head / shift in-charge | Approve violations, dispatch guards, oversee the queue |
-| `PARKING_ADMIN` | Facilities / admin office | Zones, spots, slot allocation, events, vehicle approvals, appeals |
-| `ADMIN` | IT | Users, roles, integrations, settings, full audit log |
+| `SUPERVISOR` | Security head / shift in-charge | All parking decisions: approve/reject violations, appeals (cross-shift), zones, spots, events |
+| `ADMIN` | IT | Users, roles, vehicle approval, bulk imports, full audit log, settings |
 
 **Visitors are not a role and get no account.** They hold a time-bound QR
 `VisitorPass` issued by a host or a guard. Keeping them out of the identity
 model is deliberate — a visitor is a pass, not a user.
 
-An `Auditor` read-only role was considered and dropped; `PARKING_ADMIN`
-(parking-scoped audit) and `ADMIN` (full audit) cover it.
+An `Auditor` read-only role was considered and dropped; `ADMIN` (full audit)
+covers it. Similarly, `PARKING_ADMIN` was merged into `SUPERVISOR` + `ADMIN`
+because its permission set was a strict superset of Supervisor's — pure
+addition rather than a different kind of power. Guard remains separate because
+it lacks `violation:decide`, a real gap in authority.
 
 ---
 
@@ -132,52 +134,44 @@ zone-aware `can()` / `assertCan()` check before mutating anything.
 `✓` full · `own` own records only · `req` request, needs approval ·
 `scope` limited to assigned zones · `—` none
 
-| Capability | Emp | Guard | Sup | P.Admin | Admin |
-|---|:--:|:--:|:--:|:--:|:--:|
-| View own profile / vehicles | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Add a vehicle | req | — | — | ✓ approve | ✓ |
-| View any user's vehicles | — | scope | ✓ | ✓ | ✓ |
-| View zone map & availability | ✓ | ✓ | ✓ | ✓ | ✓ |
-| View my assigned slot | ✓ | — | — | — | — |
-| Check in / find my vehicle | own | — | — | — | — |
-| Book shared / event slot | ✓ | on behalf | ✓ | ✓ | — |
-| Cancel reservation | own | — | ✓ | ✓ | — |
-| Force-release a slot | — | — | ✓ | ✓ | — |
-| Report a violation | ✓ | ✓ | ✓ | ✓ | — |
-| View reports I filed | own | own | ✓ | ✓ | ✓ |
-| View violations against me | own | own | ✓ | ✓ | ✓ |
-| Triage / verify a report | — | scope | ✓ | ✓ | — |
-| Confirm OCR plate match | — | propose | ✓ | ✓ | — |
-| Approve / reject violation | — | — | ✓ | ✓ | — |
-| Void violation (reason logged) | — | — | — | ✓ | — |
-| **Hard-delete a violation** | — | — | — | — | — |
-| File appeal on own violation | ✓ | ✓ | ✓ | ✓ | — |
-| Review / decide appeal | — | — | — | ✓ | ✓ |
-| Issue visitor pass | ✓ quota | ✓ | ✓ | ✓ | — |
-| Scan / validate pass | — | ✓ | ✓ | ✓ | — |
-| Revoke pass | own | own | ✓ | ✓ | — |
-| Log unknown vehicle | — | ✓ | ✓ | ✓ | — |
-| Receive & acknowledge alerts | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Raise emergency alert | ✓ | ✓ | ✓ | ✓ | — |
-| View dispatch queue | — | scope | ✓ | ✓ | — |
-| Dispatch a guard | — | — | ✓ | ✓ | — |
-| Create / edit zones & spots | — | — | — | ✓ | ✓ |
-| Assign fixed slots | — | — | — | ✓ | — |
-| Create event / open temp parking | — | — | ✓ | ✓ | — |
-| Bulk CSV import | — | — | — | ✓ | ✓ |
-| Create / deactivate users | — | — | — | — | ✓ |
-| **Assign roles** | — | — | — | — | **✓** |
-| View analytics | own | scope | ✓ | ✓ | ✓ |
-| View audit log | — | — | — | parking only¹ | ✓ |
-| Org settings & integrations | — | — | — | — | ✓ |
-
-¹ `audit:read:parking` shows actions on vehicles, violations, zones,
-reservations, passes and imports. `audit:read` additionally shows sign-ins,
-denied authorization attempts and role changes. The full log is a behavioural
-record of staff — who tried to sign in, from where, and who was refused what —
-and auditing parking decisions does not require it. Enforced by
-`isParkingAction()` in `audit-visibility.ts`, which fails closed on any action
-whose prefix is not explicitly listed.
+| Capability | Emp | Guard | Sup | Admin |
+|---|:--:|:--:|:--:|:--:|
+| View own profile / vehicles | ✓ | ✓ | ✓ | ✓ |
+| Add a vehicle | req | — | — | ✓ approve |
+| View any user's vehicles | — | scope | ✓ | ✓ |
+| View zone map & availability | ✓ | ✓ | ✓ | ✓ |
+| View my assigned slot | ✓ | — | — | — |
+| Check in / find my vehicle | own | — | — | — |
+| Book shared / event slot | ✓ | on behalf | ✓ | — |
+| Cancel reservation | own | — | ✓ | — |
+| Force-release a slot | — | — | ✓ | — |
+| Report a violation | ✓ | ✓ | ✓ | — |
+| View reports I filed | own | own | ✓ | ✓ |
+| View violations against me | own | own | ✓ | ✓ |
+| Triage / verify a report | — | scope | ✓ | — |
+| Confirm OCR plate match | — | propose | ✓ | — |
+| Approve / reject violation | — | — | ✓ | — |
+| Void violation (reason logged) | — | — | ✓ | — |
+| **Hard-delete a violation** | — | — | — | — |
+| File appeal on own violation | ✓ | ✓ | ✓ | — |
+| Review / decide appeal | — | — | ✓ | ✓ |
+| Issue visitor pass | ✓ quota | ✓ | ✓ | — |
+| Scan / validate pass | — | ✓ | ✓ | — |
+| Revoke pass | own | own | ✓ | — |
+| Log unknown vehicle | — | ✓ | ✓ | — |
+| Receive & acknowledge alerts | ✓ | ✓ | ✓ | ✓ |
+| Raise emergency alert | ✓ | ✓ | ✓ | — |
+| View dispatch queue | — | scope | ✓ | — |
+| Dispatch a guard | — | — | ✓ | — |
+| Create / edit zones & spots | — | — | ✓ | ✓ |
+| Assign fixed slots | — | — | ✓ | — |
+| Create event / open temp parking | — | — | ✓ | — |
+| Bulk CSV import | — | — | — | ✓ |
+| Create / deactivate users | — | — | — | ✓ |
+| **Assign roles** | — | — | — | **✓** |
+| View analytics | own | scope | ✓ | ✓ |
+| View audit log | — | — | — | ✓ |
+| Org settings & integrations | — | — | — | ✓ |
 
 ### There is no wildcard
 
@@ -185,9 +179,10 @@ Not even for `ADMIN`. Every role lists its permissions explicitly, so
 widening a role is always a visible diff in review. A wildcard is a
 permission grant nobody reads.
 
-Note the deliberate split at the bottom: **`PARKING_ADMIN` allocates slots
-but cannot manage users; `ADMIN` manages users but cannot allocate slots.**
-Neither can do the other's job, and only `ADMIN` grants roles.
+Note the deliberate split: **`SUPERVISOR` makes all parking decisions
+(zones, slots, violations, appeals) but cannot manage users; `ADMIN`
+manages users and system data but cannot allocate slots.** Neither can do
+the other's job, and only `ADMIN` grants roles.
 
 ---
 
@@ -217,7 +212,9 @@ assertImpartialAppealReviewer(actor, violation)
 An appeal reviewed by the person who made the original decision is not an
 appeal. Also blocks the reporter from reviewing.
 
-With one Parking Admin this forces the appeal up to an `ADMIN`. **That is
+With two Supervisors on different shifts (morning/night), cross-shift
+rotation ensures the appeal reviewer differs from the original decider.
+If both are unavailable the appeal falls up to an `ADMIN`. **That is
 the intended behaviour, not an edge case to design around.**
 
 ### Rule 3 — only ADMIN assigns roles, and nobody edits their own
@@ -227,7 +224,7 @@ assertMayAssignRoles(actor)
 assertNotSelfRoleChange(actor, targetUserId)
 ```
 
-The matrix already withholds `role:assign` from `PARKING_ADMIN`; the
+The matrix already withholds `role:assign` from `SUPERVISOR`; the
 assertion is belt-and-braces at the mutation site so a future widening of
 the matrix cannot silently hand out privilege escalation. The self-change
 ban stops a lone admin quietly self-elevating without a second party in the
