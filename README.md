@@ -1,134 +1,93 @@
 # Parqel
 
-Closed-campus parking accountability for a single organisation — a college or
-an IT company.
+Parking accountability for closed campuses — colleges, IT parks, gated communities.
 
-Report a badly parked vehicle, and the owner gets notified. Everyone and every
-vehicle comes from the organisation's own roster, which is what makes
-plate-to-owner mapping trustworthy without touching any government database.
+Someone parks badly, blocks your spot, or takes a fire lane. You snap a photo, enter the plate, and the vehicle's owner gets notified. That's it. No fines, no public shaming, no government databases — just a private alert between two people who share the same lot.
 
-**The hypothesis v1 exists to test:** in a closed lot, notifying an identified
-owner changes parking behaviour.
+The whole thing works because both parties are already in the organisation's roster. Plate-to-owner mapping comes from HR/admin data, not from any external lookup. No strangers, no cold start problem.
 
----
+## What it does
 
-## Getting started
+**For employees** — view your assigned parking spot, check in, find your vehicle, book shared/event slots, report violations, file appeals, issue visitor passes, and raise emergency alerts for blocked fire lanes.
 
-You need Node 20+. You do **not** need to install Postgres — Prisma 7 ships a
-local one.
+**For security** — triage incoming reports (with photo evidence and optional OCR), scan visitor passes at the gate, log unknown vehicles, and respond to dispatch assignments. Guards are zone-scoped, so Block A's guard only sees Block A's queue.
 
-```bash
-npm install
-```
+**For supervisors** — approve or reject violations, review appeals (cross-shift, so you never review your own decision), manage zones and spots, create events that temporarily repurpose parking areas, and dispatch guards.
 
-```bash
-cp .env.example .env
-```
+**For admins** — onboard users and vehicles via CSV import, assign roles, approve vehicle registrations, view the full audit trail, and manage org settings. Admins manage people and data; they don't make parking decisions.
 
-Generate a session secret and paste it into `.env` as `SESSION_SECRET`:
+## How violations work
 
-```bash
-node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
-```
+1. Someone files a report — photo required, GPS attached, plate typed in (OCR optional)
+2. A guard triages it — confirms the plate, matches it to a registered vehicle
+3. A supervisor approves or rejects
+4. The vehicle's owner gets a push notification and an in-app alert
+5. Owner can appeal — reviewed by a *different* supervisor than whoever approved it
 
-Start the local database:
+A reporter can never approve their own report. This is enforced in code, not policy.
 
-```bash
-npx prisma dev --name parqel --detach
-```
+## Zone types
 
-> **Do not use the URL it prints.** It points at `template1`, and that server
-> serves one logical database while ignoring the database name — so migrations
-> fail with *"type already exists"*. Run the bootstrap script instead, which
-> prints the two URLs to put in `.env`:
+| Type | Vehicles | Spots | Use case |
+|---|---|---|---|
+| Fixed | Four-wheeler | Numbered, assigned | Faculty/staff with dedicated bays |
+| Shared | Four-wheeler | Numbered, bookable | First-come time-boxed holds with auto-release on no-show |
+| Event | Mixed | Numbered, bookable | Convocation takes over staff parking — displaced holders get notified |
+| Two-wheeler | Two-wheeler | None — capacity only | Bike sheds. You can't number 200 bikes in a row |
 
-```bash
-npx tsx scripts/bootstrap-db.ts
-```
+## Visitor management
 
-Then set up the schema and load a demo campus:
+Employees can issue QR-based visitor passes (5 per week by default). Guards scan them at the gate. A second scan isn't refused — the guard is told "already checked in at 09:14" and uses their judgement. Unknown vehicles are checked against the registry first so a typo doesn't create a false unknown.
 
-```bash
-npm run db:migrate && npm run db:demo
-```
+## What's deliberately not here
 
-> `db:demo` adds a worked scenario — reports at every stage of review, a
-> pending appeal, gate activity and completed parking — so the queues and
-> analytics have something in them. Use `db:seed` instead for a bare campus.
-> **Showing this to someone? Follow [docs/DEMO.md](docs/DEMO.md).**
+These aren't missing features — they were considered and cut. See [DESIGN.md](docs/DESIGN.md) for the reasoning.
 
-```bash
-npm run dev
-```
+- **Fines and payments** — needs finance sign-off, a payment gateway, GST, refunds on appeal. Repeat-offender counts carry most of the deterrent without any of that.
+- **SMS/voice alerts** — requires TRAI DLT registration, which is a multi-week dependency on someone else's admin office. Push + in-app only for now.
+- **Self-registration** — if anyone can claim any plate, the owner mapping is worthless. Both auth paths (Google SSO and employee ID + OTP) must resolve to an existing roster user.
+- **Public violation feed** — a searchable log of where identifiable vehicles have been is a stalking tool. Alerts are private.
+- **Automatic parking sessions / live occupancy** — a geofence detects the phone, not the car. Manual checkout drifts to 100% occupied within a week.
 
-Sign in at http://localhost:3000/login with any employee ID printed by the
-seed (`ADM001`, `PRK001`, `SEC001`, `SEC002`, `FAC101`, `STU2201`).
+## Built with
 
-`OTP_PROVIDER=console`, so **login codes are printed in the dev-server
-terminal** rather than sent by SMS. Google SSO stays hidden until you set
-`GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`.
+Next.js 16 · React 19 · TypeScript · Prisma 7 · PostgreSQL · Tailwind 4 · Supabase (photo storage)
 
----
+## Current status
 
-## Scripts
+**Phases A through E are complete:**
 
-| | |
-|---|---|
-| `npm run dev` | Dev server |
-| `npm test` | Test suite |
-| `npm run typecheck` | `tsc --noEmit` |
-| `npm run db:migrate` | Create and apply a migration |
-| `npm run db:seed` | Reset and reseed demo data |
-| `npm run db:studio` | Browse the database |
-| `npm run audit:tail` | Print recent audit entries |
+- **A** — Schema, RBAC, audit trail, auth (Google SSO + OTP), admin console, CSV import
+- **B** — The core loop: report → triage → approve → notify → appeal
+- **C** — Gate ops: visitor passes, unknown vehicle logging, emergency alerts, guard dispatch
+- **D** — Allocation: shared/event booking, hold-and-release, events overriding fixed zones
+- **E** — Plate Recognizer OCR, analytics dashboards, audit log viewer
 
-> On a fresh clone `npm run typecheck` fails until Next has generated its
-> route types. Run `npm run dev` once, or `npx next typegen`.
+Google SSO and OCR are built but **unverified against live services** — no credentials exist yet. The system runs fine without them: sign in with an employee ID and OTP, report plates by typing them.
 
----
-
-## Layout
+## Project structure
 
 ```
-prisma/schema.prisma      18 tables — the domain model
-src/proxy.ts              Bounces requests with no session cookie. No authorization.
+prisma/schema.prisma        Domain model (18 tables)
+src/proxy.ts                Session check only — no authorization here
 src/server/
-  permissions.ts          Role × scope matrix. No wildcards.
-  rules.ts                Integrity rules that outrank the matrix.
-  dal.ts                  authorize() — where authorization actually happens.
-  audit.ts                audited() — change + log row in one transaction.
-  auth/                   Google SSO and employee-ID/OTP.
-  import/                 CSV import with preview and per-row validation.
-src/app/admin/            Admin console.
-docs/                     Design decisions. Read these first.
+  dal.ts                    authorize() — where authorization actually lives
+  permissions.ts            Role × zone-scope matrix, no wildcards
+  rules.ts                  Integrity rules that outrank the permission matrix
+  audit.ts                  audited() — mutation + audit log in one transaction
+  auth/                     Google SSO and employee-ID/OTP login
+  import/                   CSV import with preview and per-row validation
+  violations/               OCR integration, plate normalisation
+src/app/
+  (employee)/               Employee dashboard, parking, vehicles, violations, passes
+  security/                 Guard/supervisor queue, triage, dispatch, gate scan
+  admin/                    Admin console — users, analytics, audit, imports, events
+docs/
+  DESIGN.md                 What this system refuses to do and why
+  ROLES.md                  Roles, permission matrix, integrity rules
 ```
 
----
+## Documentation
 
-## Read before contributing
-
-- **[docs/DESIGN.md](docs/DESIGN.md)** — what this refuses to do and why.
-  Fines, SMS, automatic parking sessions and live occupancy are all cut
-  deliberately, not missing.
-- **[docs/ROLES.md](docs/ROLES.md)** — the five roles, the permission matrix,
-  and the four integrity rules.
-
-Three things that are load-bearing and easy to break:
-
-1. **No self-registration.** Both auth paths must resolve to an existing
-   roster user. A Google account verified but absent from the roster is
-   refused and creates nothing.
-2. **A reporter can never decide their own report.** Without this the system
-   is a harassment tool. It is enforced in code, not convention.
-3. **Nothing is hard-deleted.** Violations are voided with a written reason,
-   and every mutation commits with its audit row in the same transaction.
-
-Status: **Phases A–E complete.** Foundation and RBAC; the report → triage →
-approve → notify loop; gate operations (visitor passes, unknown vehicles,
-dispatch); booking with holds, events and entitlements; OCR, analytics and the
-audit viewer.
-
-Two things are built but **unverified against their real services**, because
-no credentials exist yet: Google Workspace SSO and Plate Recognizer OCR. Both
-are off by default and the system runs without them — sign in with an employee
-ID and OTP, and report plates by typing them.
+- [**DESIGN.md**](docs/DESIGN.md) — the decisions behind the system, what was cut and why
+- [**ROLES.md**](docs/ROLES.md) — the four roles, the full permission matrix, zone scoping, and the four integrity rules that outrank everything
